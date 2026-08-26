@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0e1a">
+<title>WeelSpin — Roue de la fortune</title>
+<link rel="icon" href="./favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+
+<!-- Décor : fond animé, lueurs, particules, vignettage -->
+<canvas id="bg" aria-hidden="true"></canvas>
+<div class="blob blob-a" aria-hidden="true"></div>
+<div class="blob blob-b" aria-hidden="true"></div>
+<div class="blob blob-c" aria-hidden="true"></div>
+<div id="vignette" aria-hidden="true"></div>
+<div id="dim" aria-hidden="true"></div>
+
+<header class="topbar">
+  <h1 class="logo"><span class="logo-emoji">🎡</span> WeelSpin</h1>
+  <div class="topbar-actions">
+    <button id="btn-mute" class="btn btn-icon" aria-label="Couper le son" aria-pressed="false" title="Son">
+      <svg class="ico-sound-on" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4V5z" fill="currentColor" stroke="none"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9.5 9.5 0 0 1 0 13"/></svg>
+      <svg class="ico-sound-off" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" hidden><path d="M11 5 6 9H2v6h4l5 4V5z" fill="currentColor" stroke="none"/><path d="m16 9 6 6"/><path d="m22 9-6 6"/></svg>
+    </button>
+    <button id="btn-present" class="btn btn-icon" aria-label="Mode présentation (plein écran)" title="Mode présentation">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H3v5"/><path d="M16 3h5v5"/><path d="M8 21H3v-5"/><path d="M16 21h5v-5"/></svg>
+    </button>
+    <button id="btn-editor" class="btn btn-icon" aria-label="Afficher ou masquer l'éditeur" aria-expanded="true" title="Éditeur">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/><circle cx="9" cy="6" r="2.2" fill="currentColor" stroke="none"/><circle cx="15" cy="12" r="2.2" fill="currentColor" stroke="none"/><circle cx="7" cy="18" r="2.2" fill="currentColor" stroke="none"/></svg>
+    </button>
+  </div>
+</header>
+
+<main class="app">
+  <!-- La scène : la roue -->
+  <section class="stage" id="stage" aria-label="Roue">
+    <div class="wheel-wrap" id="wheel-wrap">
+      <canvas id="wheel" role="img" aria-label="Roue de la fortune. Cliquez ou appuyez sur Espace pour lancer."></canvas>
+    </div>
+    <button id="btn-spin" class="btn btn-spin">
+      <span class="btn-spin-label">🎯 Lancer</span>
+      <span class="kbd" aria-hidden="true">Espace</span>
+    </button>
+  </section>
+
+  <!-- L'éditeur de segments -->
+  <aside class="editor" id="editor" aria-label="Éditeur de segments">
+    <fieldset id="editor-fields" class="editor-fields">
+      <div class="editor-head">
+        <h2>Segments <span id="seg-count" class="pill">0</span></h2>
+        <button id="btn-add" class="btn btn-primary btn-sm" aria-label="Ajouter un segment">＋ Ajouter</button>
+      </div>
+
+      <div id="seg-list" class="seg-list" aria-label="Liste des segments"></div>
+
+      <details class="bulk">
+        <summary>Saisie rapide (un libellé par ligne)</summary>
+        <textarea id="bulk" rows="5" placeholder="Alice&#10;Bob&#10;Charlie&#10;…collez ici depuis Excel ou Notepad" aria-label="Libellés, un par ligne"></textarea>
+        <button id="btn-bulk" class="btn btn-sm">Créer ces segments</button>
+      </details>
+
+      <div class="editor-actions">
+        <button id="btn-shuffle" class="btn btn-sm" title="Mélanger l'ordre">🔀 Mélanger</button>
+        <button id="btn-clear" class="btn btn-sm btn-danger" title="Tout supprimer">🗑 Tout supprimer</button>
+        <button id="btn-export" class="btn btn-sm" title="Télécharger la configuration en JSON">⬇ Exporter</button>
+        <button id="btn-import" class="btn btn-sm" title="Importer un fichier JSON">⬆ Importer</button>
+        <input type="file" id="file-import" accept=".json,application/json" hidden aria-hidden="true">
+      </div>
+      <p class="hint">Astuce : glissez-déposez un fichier <code>.json</code> n'importe où sur la page pour l'importer.</p>
+    </fieldset>
+  </aside>
+</main>
+
+<!-- Effets plein écran (confettis, étincelles, ondes) -->
+<canvas id="fx" aria-hidden="true"></canvas>
+<div id="flash" aria-hidden="true"></div>
+
+<!-- Sortie du mode présentation -->
+<button id="btn-exit-present" class="btn btn-icon" aria-label="Quitter le mode présentation" hidden>✕</button>
+
+<!-- Zone de dépôt de fichier -->
+<div id="drop-overlay" aria-hidden="true"><div class="drop-inner">📥 Déposez le fichier JSON pour importer</div></div>
+
+<!-- Résultat -->
+<div id="result" class="result-overlay" hidden>
+  <div class="result-card" role="alertdialog" aria-modal="true" aria-labelledby="result-label">
+    <div class="result-border" aria-hidden="true"></div>
+    <div class="result-inner">
+      <div class="result-kicker">🎉 Et le gagnant est 🎉</div>
+      <div id="result-label" class="result-name">—</div>
+      <div class="result-actions">
+        <button id="btn-again" class="btn btn-primary">🔁 Relancer</button>
+        <button id="btn-close" class="btn">Fermer</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Notifications & accessibilité -->
+<div id="toast" class="toast" role="status"></div>
+<div id="live" class="sr-only" aria-live="assertive"></div>
+
+<script src="./app.js"></script>
+</body>
+</html>
