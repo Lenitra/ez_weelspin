@@ -25,7 +25,8 @@ const MUTE_KEY = 'weelspin.muted.v1';
 const $ = (id) => document.getElementById(id);
 const els = {
   bg: $('bg'), fx: $('fx'), wheel: $('wheel'), wheelWrap: $('wheel-wrap'),
-  stage: $('stage'), halo: $('halo'), rays: $('rays'), dim: $('dim'), flash: $('flash'),
+  stage: $('stage'), halo: $('halo'), rays: $('rays'),
+  hudVel: $('hud-vel'), hudTurns: $('hud-turns'), hudStatus: $('hud-status'), dim: $('dim'), flash: $('flash'),
   btnSpin: $('btn-spin'), btnMute: $('btn-mute'), btnPresent: $('btn-present'),
   btnExitPresent: $('btn-exit-present'), btnEditor: $('btn-editor'),
   editor: $('editor'), editorFields: $('editor-fields'),
@@ -248,6 +249,48 @@ function ensureAudio() {
   audio.noiseBuf = audio.ctx.createBuffer(1, len, audio.ctx.sampleRate);
   const d = audio.noiseBuf.getChannelData(0);
   for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+  droneStart();
+}
+
+/** Drone spatial d'ambiance, très discret (passe par le master : muet = silence). */
+function droneStart() {
+  if (!audio.ctx || state.reduced) return;
+  const t = audio.ctx.currentTime;
+  const g = audio.ctx.createGain();
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.linearRampToValueAtTime(0.035, t + 4);
+  const lp = audio.ctx.createBiquadFilter();
+  lp.type = 'lowpass'; lp.frequency.value = 220; lp.Q.value = 2;
+  const lfo = audio.ctx.createOscillator();
+  const lfoG = audio.ctx.createGain();
+  lfo.frequency.value = 0.07; lfoG.gain.value = 120;
+  lfo.connect(lfoG).connect(lp.frequency);
+  for (const [f, type] of [[55, 'sine'], [55.6, 'sine'], [110, 'sawtooth'], [164.8, 'triangle']]) {
+    const o = audio.ctx.createOscillator();
+    o.type = type; o.frequency.value = f;
+    o.connect(lp);
+    o.start(t);
+  }
+  lp.connect(g).connect(audio.master);
+  lfo.start(t);
+}
+
+/** Bip de verrouillage (HUD). */
+function sndLock(final) {
+  if (!audio.ctx || state.muted) return;
+  const t = audio.ctx.currentTime;
+  const seq = final ? [1046, 1318, 1568] : [880];
+  seq.forEach((f, i) => {
+    const o = audio.ctx.createOscillator();
+    const g = audio.ctx.createGain();
+    o.type = 'sine'; o.frequency.value = f;
+    const t0 = t + i * 0.07;
+    g.gain.setValueAtTime(0.0001, t0);
+    g.gain.linearRampToValueAtTime(0.08, t0 + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.12);
+    o.connect(g).connect(audio.master);
+    o.start(t0); o.stop(t0 + 0.14);
+  });
 }
 
 function setMuted(muted) {
@@ -484,6 +527,7 @@ function drawBg(now, dt) {
   drawPlanet(now);
   drawAsteroids(now, dt);
   drawCage(bgCtx, now, false);
+  drawReticle(now);
 
   // Étoiles filantes, de temps en temps
   if (now > nextShooting) { spawnShooting(); nextShooting = now + 3500 + Math.random() * 6000; }
@@ -676,6 +720,113 @@ function drawCage(ctx, now, front) {
   });
 }
 
+/** Réticule de visée : couronne graduée, arcs tournants, crochets. Rouge au verrouillage. */
+function drawReticle(now) {
+  if (!cssSize || !state.segments.length) return;
+  const wc = wheelCenter();
+  const lock = state.suspense;
+  const col = lock > 0.3 ? '255,77,224' : '76,240,255';
+  const ws = wireScale();
+  const ctx = bgCtx;
+  ctx.save();
+  ctx.translate(wc.x, wc.y);
+  // Couronne graduée (tourne à l'envers de la roue, lentement)
+  const r1 = wc.R * 1.33;
+  ctx.rotate(-state.rot * 0.5 - now / 30000 * TAU);
+  ctx.lineWidth = ws;
+  for (let i = 0; i < 72; i++) {
+    const a = i / 72 * TAU;
+    const len = i % 18 === 0 ? 14 : i % 6 === 0 ? 8 : 4;
+    ctx.strokeStyle = 'rgba(' + col + ',' + (i % 6 === 0 ? 0.55 : 0.28) + ')';
+    ctx.beginPath();
+    ctx.moveTo(Math.cos(a) * r1, Math.sin(a) * r1);
+    ctx.lineTo(Math.cos(a) * (r1 + len * ws), Math.sin(a) * (r1 + len * ws));
+    ctx.stroke();
+  }
+  ctx.restore();
+  // Arcs qui tournent à des vitesses différentes
+  ctx.save();
+  ctx.translate(wc.x, wc.y);
+  const arcsDef = [[1.38, 1 / 7000, 2.1, 0.45], [1.42, -1 / 11000, 1.1, 0.35], [1.29, 1 / 4000, 0.5, 0.6]];
+  for (const [rr, sp, span, a] of arcsDef) {
+    const a0 = now * sp * TAU + state.rot * 0.2;
+    ctx.strokeStyle = 'rgba(' + col + ',' + a + ')';
+    ctx.lineWidth = (1.5 + lock * 1.5) * ws;
+    ctx.beginPath(); ctx.arc(0, 0, wc.R * rr, a0, a0 + span); ctx.stroke();
+  }
+  // Crochets d'angle (pulsent, se resserrent au verrouillage)
+  const d = wc.R * (1.55 - 0.08 * lock) * (1 + 0.01 * Math.sin(now / 300));
+  const L = 18 * ws;
+  ctx.strokeStyle = 'rgba(' + col + ',' + (0.5 + 0.4 * lock) + ')';
+  ctx.lineWidth = 2 * ws;
+  for (const [sx, sy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+    ctx.beginPath();
+    ctx.moveTo(sx * d, sy * d - sy * L); ctx.lineTo(sx * d, sy * d); ctx.lineTo(sx * d - sx * L, sy * d);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+/** Tunnel hyperespace fil de fer : anneaux 3D qui foncent vers la caméra au départ du spin. */
+let tunnel = { t0: -1e9, rings: [] };
+function tunnelStart(now) {
+  tunnel.t0 = now;
+  tunnel.rings = Array.from({ length: 14 }, (_, i) => ({ z: i / 14 }));
+}
+function drawTunnel(now, dt) {
+  const age = (now - tunnel.t0) / 1000;
+  if (age < 0 || age > 2.2 || state.reduced) return;
+  const I = age < 0.3 ? age / 0.3 : age > 1.5 ? 1 - (age - 1.5) / 0.7 : 1;   // fondu entrée / sortie
+  const wc = wheelCenter();
+  const speed = 1.6;
+  const spin = state.rot * 0.6;
+  fctx.save();
+  fctx.globalCompositeOperation = 'lighter';
+  fctx.lineWidth = 1.5 * wireScale();
+  for (const ring of tunnel.rings) {
+    ring.z += speed * dt;
+    if (ring.z > 1) ring.z -= 1;
+    const s = 1 / (1.05 - ring.z);                 // perspective : z→1 = tout près
+    const r = wc.R * 0.25 * s;
+    if (r > Math.max(innerWidth, innerHeight) * 1.6) continue;
+    const a = I * 0.55 * ring.z;
+    fctx.strokeStyle = (ring.z * 5 | 0) % 2 ? 'rgba(76,240,255,' + a + ')' : 'rgba(255,77,224,' + a + ')';
+    fctx.beginPath();
+    for (let k = 0; k <= 12; k++) {                // dodécagone = anneau "fil de fer"
+      const ang = k / 12 * TAU + spin;
+      const x = wc.x + Math.cos(ang) * r, y = wc.y + Math.sin(ang) * r;
+      k ? fctx.lineTo(x, y) : fctx.moveTo(x, y);
+    }
+    fctx.stroke();
+  }
+  // Longerons qui relient les anneaux
+  fctx.strokeStyle = 'rgba(160,230,255,' + (I * 0.18) + ')';
+  for (let k = 0; k < 12; k++) {
+    const ang = k / 12 * TAU + spin;
+    fctx.beginPath();
+    fctx.moveTo(wc.x + Math.cos(ang) * wc.R * 0.25, wc.y + Math.sin(ang) * wc.R * 0.25);
+    fctx.lineTo(wc.x + Math.cos(ang) * innerWidth * 2, wc.y + Math.sin(ang) * innerWidth * 2);
+    fctx.stroke();
+  }
+  fctx.restore();
+}
+
+/** HUD télémétrique (mis à jour à ~15 Hz pour ne pas toucher au DOM à chaque frame). */
+let hudNext = 0;
+function updateHud(now) {
+  if (now < hudNext) return;
+  hudNext = now + 66;
+  els.hudVel.textContent = Math.abs(state.vel).toFixed(1).padStart(4, '0');
+  els.hudTurns.textContent = spin ? ((state.rot - spin.rot0) / TAU).toFixed(2) : '0.00';
+  let status;
+  if (state.spinning) status = state.suspense > 0 ? 'VERROUILLAGE…' : 'ROTATION ' + (indexAt(state.rot) + 1) + '/' + arcs.length;
+  else if (state.winner !== null) status = 'CIBLE VERROUILLÉE';
+  else status = state.segments.length ? 'PRÊT · ' + state.segments.length + ' SEGMENTS' : 'AUCUNE CIBLE';
+  if (els.hudStatus.textContent !== status) els.hudStatus.textContent = status;
+  document.body.classList.toggle('suspense', state.spinning && state.suspense > 0);
+  document.body.classList.toggle('locked', !state.spinning && state.winner !== null);
+}
+
 /* ============================ 6. Rendu de la roue ========================= */
 
 const wctx = els.wheel.getContext('2d');
@@ -689,8 +840,8 @@ let cacheDirty = true;
 let pk = 0, pv = 0;
 
 function layoutWheel() {
-  const rect = els.wheelWrap.getBoundingClientRect();
-  const s = Math.floor(Math.min(rect.width, rect.height));
+  // clientWidth/Height : boîte de layout, insensible aux transformations CSS (tilt, boot)
+  const s = Math.floor(Math.min(els.wheelWrap.clientWidth, els.wheelWrap.clientHeight));
   if (s < 40) return;
   cssSize = s;
   const dpr = Math.min(devicePixelRatio || 1, 3);
@@ -1051,6 +1202,18 @@ function drawWheel(now) {
   c.fillText('SPIN', 0, Rh * 0.03);
   c.shadowBlur = 0;
 
+  // Laser de visée : du pointeur au moyeu, s'intensifie avec le suspense
+  if (state.suspense > 0.05 && !state.reduced) {
+    const la = state.suspense * (0.5 + 0.5 * Math.sin(now / 40));
+    c.save();
+    c.globalCompositeOperation = 'lighter';
+    c.strokeStyle = 'rgba(255,77,224,' + la.toFixed(3) + ')';
+    c.lineWidth = 2;
+    c.shadowColor = '#ff4de0'; c.shadowBlur = 12;
+    c.beginPath(); c.moveTo(0, -R); c.lineTo(0, -Rh); c.stroke();
+    c.restore();
+  }
+
   // Pointeur en haut, avec claquement élastique (ressort pk/pv)
   c.save();
   c.translate(0, -R + 2);
@@ -1168,7 +1331,7 @@ function drawFx(now, dt) {
   const dpr = Math.min(devicePixelRatio || 1, 2);
   fctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   fctx.clearRect(0, 0, innerWidth, innerHeight);
-  if (!state.reduced) drawCage(fctx, now, true);
+  if (!state.reduced) { drawCage(fctx, now, true); drawTunnel(now, dt); }
   if (!hasWork) return;
 
   // Rayons lumineux (additifs) qui partent du segment gagnant
@@ -1300,6 +1463,7 @@ function startSpin() {
   };
   state.spinning = true;
   lockUI(true);
+  tunnelStart(performance.now() + (state.reduced ? 0 : 450));   // après le micro-recul
   sndWhoosh();
   vibrate(15);
   announce('La roue tourne…');
@@ -1332,7 +1496,7 @@ function updateSpin(now, dt) {
   // Suspense : les tout derniers degrés
   const remaining = spin.rot0 + spin.delta - state.rot;
   const f = state.reduced ? 0 : clamp(1 - remaining / 0.9, 0, 1);
-  if (f > 0 && state.suspense === 0) riserStart();
+  if (f > 0 && state.suspense === 0) { riserStart(); sndLock(false); }
   state.suspense = f;
   riserUpdate(f);
   els.dim.style.opacity = f * 0.45;
@@ -1370,6 +1534,7 @@ function finishSpin(now) {
   announce(`Résultat : ${seg.label}`);
 
   sndVictory();
+  sndLock(true);
   vibrate([60, 40, 60, 40, 140]);
 
   if (!state.reduced) {
@@ -1790,6 +1955,7 @@ function frame(now) {
   const dt = clamp((now - lastFrame) / 1000, 0, 0.05);
   lastFrame = now;
   updateSpin(now, dt);
+  updateHud(now);
   drawBg(now, dt);
   drawWheel(now);
   drawFx(now, dt);
@@ -1822,6 +1988,12 @@ function init() {
   bindGlobal();
 
   requestAnimationFrame(frame);
+
+  // Séquence de démarrage : la roue se matérialise
+  if (!state.reduced) {
+    document.body.classList.add('boot');
+    setTimeout(() => { document.body.classList.remove('boot'); layoutWheel(); }, 1600);
+  }
 }
 
 init();
