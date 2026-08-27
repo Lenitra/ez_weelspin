@@ -139,7 +139,18 @@ body:not(.editor-open) .app { grid-template-columns: 1fr; }
   transition: transform 0.15s ease-out;
   will-change: transform;
 }
-#wheel { display: block; cursor: pointer; touch-action: manipulation; }
+/* Halo de suspense / victoire : élément DOM derrière la roue, jamais rogné */
+#halo {
+  position: absolute; left: 50%; top: 50%;
+  width: 0; height: 0;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  background: radial-gradient(circle, var(--halo-color, #ffd75e) 0%, transparent 68%);
+  opacity: 0;
+  pointer-events: none;
+  will-change: opacity, transform;
+}
+#wheel { position: relative; display: block; cursor: pointer; touch-action: manipulation; }
 body.spinning #wheel { cursor: wait; }
 
 /* Secousse de victoire */

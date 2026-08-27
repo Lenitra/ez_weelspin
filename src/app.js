@@ -25,7 +25,7 @@ const MUTE_KEY = 'weelspin.muted.v1';
 const $ = (id) => document.getElementById(id);
 const els = {
   bg: $('bg'), fx: $('fx'), wheel: $('wheel'), wheelWrap: $('wheel-wrap'),
-  stage: $('stage'), dim: $('dim'), flash: $('flash'),
+  stage: $('stage'), halo: $('halo'), dim: $('dim'), flash: $('flash'),
   btnSpin: $('btn-spin'), btnMute: $('btn-mute'), btnPresent: $('btn-present'),
   btnExitPresent: $('btn-exit-present'), btnEditor: $('btn-editor'),
   editor: $('editor'), editorFields: $('editor-fields'),
@@ -564,18 +564,18 @@ function drawWheel(now) {
   c.translate(half, half + floatY);
   c.scale(breath * zoom, breath * zoom);
 
-  // Halo derrière la roue : pulse pendant le suspense et la victoire
+  // Halo derrière la roue (élément DOM #halo, hors canvas pour ne pas être rogné)
   const haloI = Math.max(state.suspense, state.winner !== null ? 0.7 : 0);
   if (haloI > 0.02 && !state.reduced) {
     const pulse = 0.6 + 0.4 * Math.sin(now / (110 - 60 * state.suspense));
-    const hg = c.createRadialGradient(0, 0, R * 0.5, 0, 0, R * 1.35);
     const col = state.winner !== null ? state.segments[state.winner].color : '#ffd75e';
-    const { r, g, b } = hexToRgb(normalizeColor(col) || '#ffd75e');
-    hg.addColorStop(0, `rgba(${r},${g},${b},0)`);
-    hg.addColorStop(0.75, `rgba(${r},${g},${b},${0.28 * haloI * pulse})`);
-    hg.addColorStop(1, `rgba(${r},${g},${b},0)`);
-    c.fillStyle = hg;
-    c.beginPath(); c.arc(0, 0, R * 1.35, 0, TAU); c.fill();
+    const d = Math.round(R * 2.9 * breath * zoom);
+    els.halo.style.width = els.halo.style.height = d + 'px';
+    els.halo.style.setProperty('--halo-color', col);
+    els.halo.style.transform = `translate(-50%, calc(-50% + ${floatY.toFixed(1)}px))`;
+    els.halo.style.opacity = (0.55 * haloI * pulse).toFixed(3);
+  } else if (els.halo.style.opacity !== '0') {
+    els.halo.style.opacity = '0';
   }
 
   const drawCache = (rot, alpha) => {
