@@ -374,39 +374,93 @@ function sndUi(kind) {
   osc.start(t); osc.stop(t + 0.15);
 }
 
-/* ============================ 5. Fond animé =============================== */
+/* ============================ 5. Fond animé : champ d'étoiles ============ */
 
 const bgCtx = els.bg.getContext('2d');
-let motes = [];
+let stars = [];          // trois profondeurs (z) pour la parallaxe
+let shooting = [];       // étoiles filantes
+let nextShooting = 0;
 
 function initMotes() {
-  motes = [];
+  stars = [];
   if (state.reduced) return;
-  const n = Math.min(80, Math.round(innerWidth * innerHeight / 22000));
+  const n = Math.min(320, Math.round(innerWidth * innerHeight / 6500));
   for (let i = 0; i < n; i++) {
-    motes.push({
-      x: Math.random() * innerWidth, y: Math.random() * innerHeight,
-      r: 0.6 + Math.random() * 2.2,
-      vy: 4 + Math.random() * 14, sway: 10 + Math.random() * 30,
-      ph: Math.random() * TAU, hue: 190 + Math.random() * 150,
+    const z = 0.25 + Math.random() * 0.75;          // profondeur : petit/lent -> gros/rapide
+    stars.push({
+      x: Math.random() * innerWidth, y: Math.random() * innerHeight, z,
+      r: 0.4 + z * 1.6,
+      ph: Math.random() * TAU, tw: 0.6 + Math.random() * 2.2,
+      hue: Math.random() < 0.15 ? 300 : Math.random() < 0.5 ? 195 : 45, // magenta / cyan / or
+      sat: Math.random() < 0.6 ? 0 : 70,
     });
   }
 }
 
+function spawnShooting() {
+  const fromLeft = Math.random() < 0.5;
+  shooting.push({
+    x: fromLeft ? -40 : innerWidth + 40, y: Math.random() * innerHeight * 0.5,
+    vx: (fromLeft ? 1 : -1) * (700 + Math.random() * 500), vy: 250 + Math.random() * 250,
+    life: 0, ttl: 1.1 + Math.random() * 0.5,
+  });
+}
+
 function drawBg(now, dt) {
-  const w = els.bg.width, h = els.bg.height;
-  bgCtx.clearRect(0, 0, w, h);
-  if (state.reduced) return;
   const dpr = Math.min(devicePixelRatio || 1, 2);
-  for (const m of motes) {
-    m.y -= m.vy * dt;
-    if (m.y < -10) { m.y = innerHeight + 10; m.x = Math.random() * innerWidth; }
-    const x = m.x + Math.sin(now / 2400 + m.ph) * m.sway;
-    const a = 0.08 + 0.22 * (0.5 + 0.5 * Math.sin(now / 900 + m.ph * 3));
-    bgCtx.fillStyle = `hsla(${m.hue},80%,72%,${a})`;
+  bgCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  bgCtx.clearRect(0, 0, innerWidth, innerHeight);
+  if (state.reduced) return;
+
+  // Warp : les étoiles s'étirent depuis le centre de la roue selon sa vitesse
+  const warp = clamp(Math.abs(state.vel) / 30, 0, 1);
+  const wc = warp > 0.02 ? wheelCenter() : null;
+
+  for (const s of stars) {
+    s.y += s.z * 3 * dt;                                     // dérive lente vers le bas
+    if (s.y > innerHeight + 4) { s.y = -4; s.x = Math.random() * innerWidth; }
+    const twinkle = 0.55 + 0.45 * Math.sin(now / 1000 * s.tw + s.ph);
+    const a = clamp((0.25 + 0.6 * s.z) * twinkle + warp * 0.3, 0, 1);
+    bgCtx.fillStyle = bgCtx.strokeStyle = 'hsla(' + s.hue + ',' + s.sat + '%,' + (85 + s.z * 10) + '%,' + a + ')';
+    if (wc) {
+      const dx = s.x - wc.x, dy = s.y - wc.y;
+      const len = warp * warp * s.z * 0.35;
+      bgCtx.lineWidth = s.r * 1.2;
+      bgCtx.beginPath();
+      bgCtx.moveTo(s.x, s.y);
+      bgCtx.lineTo(s.x + dx * len, s.y + dy * len);
+      bgCtx.stroke();
+    } else {
+      bgCtx.beginPath();
+      bgCtx.arc(s.x, s.y, s.r, 0, TAU);
+      bgCtx.fill();
+      if (s.z > 0.85) {                                      // éclat en croix sur les grosses
+        bgCtx.globalAlpha = a * 0.5;
+        bgCtx.fillRect(s.x - s.r * 4, s.y - 0.4, s.r * 8, 0.8);
+        bgCtx.fillRect(s.x - 0.4, s.y - s.r * 4, 0.8, s.r * 8);
+        bgCtx.globalAlpha = 1;
+      }
+    }
+  }
+
+  // Étoiles filantes, de temps en temps
+  if (now > nextShooting) { spawnShooting(); nextShooting = now + 3500 + Math.random() * 6000; }
+  for (let i = shooting.length - 1; i >= 0; i--) {
+    const m = shooting[i];
+    m.life += dt;
+    if (m.life > m.ttl) { shooting.splice(i, 1); continue; }
+    m.x += m.vx * dt; m.y += m.vy * dt;
+    const tail = 0.12;
+    const fade = Math.sin(Math.PI * m.life / m.ttl);
+    const g = bgCtx.createLinearGradient(m.x, m.y, m.x - m.vx * tail, m.y - m.vy * tail);
+    g.addColorStop(0, 'rgba(255,255,255,' + 0.95 * fade + ')');
+    g.addColorStop(1, 'rgba(120,220,255,0)');
+    bgCtx.strokeStyle = g;
+    bgCtx.lineWidth = 2;
     bgCtx.beginPath();
-    bgCtx.arc(x * dpr, m.y * dpr, m.r * dpr, 0, TAU);
-    bgCtx.fill();
+    bgCtx.moveTo(m.x, m.y);
+    bgCtx.lineTo(m.x - m.vx * tail, m.y - m.vy * tail);
+    bgCtx.stroke();
   }
 }
 
@@ -578,6 +632,30 @@ function drawWheel(now) {
     els.halo.style.opacity = '0';
   }
 
+  // Anneaux orbitaux et lunes qui gravitent autour du portail
+  if (!state.reduced) {
+    const orbits = [
+      { r: R * 1.06, speed: 1 / 5200, moon: 3.2, col: '76,240,255' },
+      { r: R * 1.13, speed: -1 / 8300, moon: 2.4, col: '255,77,224' },
+    ];
+    for (const o of orbits) {
+      c.beginPath(); c.arc(0, 0, o.r, 0, TAU);
+      c.strokeStyle = 'rgba(' + o.col + ',0.16)';
+      c.lineWidth = 1;
+      c.setLineDash([2, 6]);
+      c.stroke();
+      c.setLineDash([]);
+      const a = now * o.speed * TAU + state.rot * 0.15;
+      const mx = Math.cos(a) * o.r, my = Math.sin(a) * o.r;
+      c.beginPath(); c.arc(mx, my, o.moon, 0, TAU);
+      c.fillStyle = '#fff';
+      c.shadowColor = 'rgb(' + o.col + ')';
+      c.shadowBlur = 14;
+      c.fill();
+      c.shadowBlur = 0;
+    }
+  }
+
   const drawCache = (rot, alpha) => {
     c.save();
     c.rotate(rot);
@@ -649,14 +727,14 @@ function drawWheel(now) {
   // Anneau métallique + néon dont la teinte tourne
   const ringR = (Rw + R) / 2;
   const mg = c.createLinearGradient(0, -R, 0, R);
-  mg.addColorStop(0, '#dfe5f2'); mg.addColorStop(0.4, '#8a93a8');
-  mg.addColorStop(0.6, '#c6cdde'); mg.addColorStop(1, '#6d7488');
+  mg.addColorStop(0, '#d6e8ff'); mg.addColorStop(0.4, '#5f6f9a');
+  mg.addColorStop(0.6, '#b3c6ea'); mg.addColorStop(1, '#3f4a70');
   c.beginPath(); c.arc(0, 0, ringR, 0, TAU);
   c.strokeStyle = mg;
   c.lineWidth = R - Rw;
   c.stroke();
   if (!state.reduced) {
-    const hue = (now / 25) % 360;
+    const hue = 185 + 120 * (0.5 + 0.5 * Math.sin(now / 1800)); // oscille cyan <-> magenta
     c.beginPath(); c.arc(0, 0, R, 0, TAU);
     c.strokeStyle = `hsla(${hue},95%,62%,0.6)`;
     c.lineWidth = 2.5;
@@ -669,23 +747,30 @@ function drawWheel(now) {
   // Moyeu central « SPIN » qui pulse pour appeler le clic
   const hubPulse = state.spinning || state.reduced ? 1 : 1 + 0.045 * Math.sin(now / 380);
   const Rh = Math.max(Rw * 0.16, 26) * hubPulse;
-  const hubG = c.createRadialGradient(-Rh * 0.3, -Rh * 0.3, Rh * 0.1, 0, 0, Rh);
-  hubG.addColorStop(0, '#3a4160'); hubG.addColorStop(0.7, '#181c30'); hubG.addColorStop(1, '#0c0e1c');
+  const hubG = c.createRadialGradient(-Rh * 0.3, -Rh * 0.3, Rh * 0.05, 0, 0, Rh);
+  hubG.addColorStop(0, '#5a2d9a'); hubG.addColorStop(0.5, '#1c0f3d'); hubG.addColorStop(1, '#07091a');
   c.beginPath(); c.arc(0, 0, Rh, 0, TAU);
   c.fillStyle = hubG;
-  c.shadowColor = 'rgba(0,0,0,0.6)';
-  c.shadowBlur = 14;
+  c.shadowColor = state.reduced ? 'rgba(0,0,0,0.6)' : 'rgba(76,240,255,' + (0.35 + 0.25 * Math.sin(now / 380)) + ')';
+  c.shadowBlur = Rh * 0.6;
   c.fill();
   c.shadowBlur = 0;
   c.beginPath(); c.arc(0, 0, Rh, 0, TAU);
-  c.strokeStyle = 'rgba(255,255,255,0.35)';
+  c.strokeStyle = 'rgba(120,230,255,0.75)';
   c.lineWidth = 2;
+  c.stroke();
+  c.beginPath(); c.arc(0, 0, Rh * 0.86, 0, TAU);
+  c.strokeStyle = 'rgba(255,77,224,0.35)';
+  c.lineWidth = 1;
   c.stroke();
   c.fillStyle = '#fff';
   c.textAlign = 'center';
   c.textBaseline = 'middle';
-  c.font = `800 ${Rh * 0.42}px system-ui, sans-serif`;
+  c.font = `800 ${Rh * 0.4}px system-ui, sans-serif`;
+  c.shadowColor = 'rgba(76,240,255,0.9)';
+  c.shadowBlur = 10;
   c.fillText('SPIN', 0, Rh * 0.03);
+  c.shadowBlur = 0;
 
   // Pointeur en haut, avec claquement élastique (ressort pk/pv)
   c.save();
@@ -693,7 +778,7 @@ function drawWheel(now) {
   c.rotate(pk);
   const pw = Math.max(R * 0.075, 10), ph = Math.max(R * 0.15, 22);
   const pg = c.createLinearGradient(-pw, 0, pw, 0);
-  pg.addColorStop(0, '#9aa2b8'); pg.addColorStop(0.5, '#f4f7ff'); pg.addColorStop(1, '#7d8499');
+  pg.addColorStop(0, '#7c8cb5'); pg.addColorStop(0.5, '#f4f9ff'); pg.addColorStop(1, '#5d6a92');
   c.beginPath();
   c.moveTo(-pw, -ph * 0.55);
   c.lineTo(pw, -ph * 0.55);
@@ -708,8 +793,11 @@ function drawWheel(now) {
   c.lineWidth = 1.5;
   c.stroke();
   c.beginPath(); c.arc(0, -ph * 0.3, pw * 0.32, 0, TAU);
-  c.fillStyle = '#ff4d6d';
+  c.fillStyle = '#4cf0ff';
+  c.shadowColor = '#4cf0ff';
+  c.shadowBlur = 8;
   c.fill();
+  c.shadowBlur = 0;
   c.restore();
 
   c.restore(); // fin translate/scale global
@@ -723,7 +811,7 @@ const sparks = [];     // étincelles du pointeur
 const waves = [];      // ondes de choc circulaires
 const rays = [];       // rayons lumineux depuis le gagnant
 
-const CONFETTI_COLORS = ['#ff4d6d', '#ffd75e', '#5f6cff', '#3ddc97', '#ff9a3d', '#c04cfd', '#ffffff'];
+const CONFETTI_COLORS = ['#ff4de0', '#4cf0ff', '#ffd75e', '#7b2cff', '#ffffff', '#3ddc97', '#ff9a3d'];
 
 function layoutFxCanvas(canvas) {
   const dpr = Math.min(devicePixelRatio || 1, 2);
@@ -781,7 +869,7 @@ function spawnSparks(n, vel) {
       x: wc.x + (Math.random() - 0.5) * 8, y: wc.y - wc.R,
       vx: Math.cos(a) * v * -Math.sign(vel || 1), vy: Math.sin(a) * v,
       ttl: 0.3 + Math.random() * 0.35, life: 0,
-      color: Math.random() < 0.6 ? '#ffd75e' : '#ffffff',
+      color: Math.random() < 0.6 ? '#4cf0ff' : '#ffffff',
     });
   }
 }
