@@ -26,7 +26,7 @@ const $ = (id) => document.getElementById(id);
 const els = {
   bg: $('bg'), fx: $('fx'), wheel: $('wheel'), wheelWrap: $('wheel-wrap'),
   stage: $('stage'), halo: $('halo'), rays: $('rays'),
-  hudVel: $('hud-vel'), hudTurns: $('hud-turns'), hudStatus: $('hud-status'), dim: $('dim'), flash: $('flash'),
+  dim: $('dim'), flash: $('flash'),
   btnSpin: $('btn-spin'), btnMute: $('btn-mute'), btnPresent: $('btn-present'),
   btnExitPresent: $('btn-exit-present'), btnEditor: $('btn-editor'),
   editor: $('editor'), editorFields: $('editor-fields'),
@@ -809,22 +809,6 @@ function drawTunnel(now, dt) {
     fctx.stroke();
   }
   fctx.restore();
-}
-
-/** HUD télémétrique (mis à jour à ~15 Hz pour ne pas toucher au DOM à chaque frame). */
-let hudNext = 0;
-function updateHud(now) {
-  if (now < hudNext) return;
-  hudNext = now + 66;
-  els.hudVel.textContent = Math.abs(state.vel).toFixed(1).padStart(4, '0');
-  els.hudTurns.textContent = spin ? ((state.rot - spin.rot0) / TAU).toFixed(2) : '0.00';
-  let status;
-  if (state.spinning) status = state.suspense > 0 ? 'VERROUILLAGE…' : 'ROTATION ' + (indexAt(state.rot) + 1) + '/' + arcs.length;
-  else if (state.winner !== null) status = 'CIBLE VERROUILLÉE';
-  else status = state.segments.length ? 'PRÊT · ' + state.segments.length + ' SEGMENTS' : 'AUCUNE CIBLE';
-  if (els.hudStatus.textContent !== status) els.hudStatus.textContent = status;
-  document.body.classList.toggle('suspense', state.spinning && state.suspense > 0);
-  document.body.classList.toggle('locked', !state.spinning && state.winner !== null);
 }
 
 /* ============================ 6. Rendu de la roue ========================= */
@@ -1955,7 +1939,6 @@ function frame(now) {
   const dt = clamp((now - lastFrame) / 1000, 0, 0.05);
   lastFrame = now;
   updateSpin(now, dt);
-  updateHud(now);
   drawBg(now, dt);
   drawWheel(now);
   drawFx(now, dt);
