@@ -1,6 +1,6 @@
 # WeelSpin 🎡
 
-Roue de la fortune 100 % statique : vanilla JS, zéro dépendance, zéro requête réseau.
+Roue de la fortune 100 % statique (personnes, récompenses, choix… tout ce qui se tire au sort) : vanilla JS, zéro dépendance, zéro requête réseau.
 Configuration (segments) dans le localStorage, avec export / import JSON.
 
 ## Lancer en local

@@ -211,7 +211,7 @@ function validateData(data) {
 }
 
 function defaultSegments() {
-  const labels = ['Alice 🚀', 'Bob 🎸', 'Charlie ☕', 'Dana 🌈', 'Eve 🎲', 'Félix 🔥'];
+  const labels = ['Pizza 🍕', 'Bon d’achat 🎁', 'Jour de télétravail 🏠', 'Café offert ☕', 'Rejouer 🔁', 'Jackpot 💰'];
   return labels.map((label, i) => ({ id: uid(), label, color: autoColor(i), weight: 1 }));
 }
 
@@ -991,7 +991,7 @@ function finishSpin(now) {
   state.winner = winner;
   state.winTime = now;
   const seg = state.segments[winner];
-  announce(`Gagnant : ${seg.label}`);
+  announce(`Résultat : ${seg.label}`);
 
   sndVictory();
   vibrate([60, 40, 60, 40, 140]);
