@@ -25,7 +25,7 @@ const MUTE_KEY = 'weelspin.muted.v1';
 const $ = (id) => document.getElementById(id);
 const els = {
   bg: $('bg'), fx: $('fx'), wheel: $('wheel'), wheelWrap: $('wheel-wrap'),
-  stage: $('stage'), halo: $('halo'), dim: $('dim'), flash: $('flash'),
+  stage: $('stage'), halo: $('halo'), rays: $('rays'), dim: $('dim'), flash: $('flash'),
   btnSpin: $('btn-spin'), btnMute: $('btn-mute'), btnPresent: $('btn-present'),
   btnExitPresent: $('btn-exit-present'), btnEditor: $('btn-editor'),
   editor: $('editor'), editorFields: $('editor-fields'),
@@ -380,6 +380,75 @@ const bgCtx = els.bg.getContext('2d');
 let stars = [];          // trois profondeurs (z) pour la parallaxe
 let shooting = [];       // étoiles filantes
 let nextShooting = 0;
+let planet = null;       // { canvas, cx, cy, r, size }
+
+/** Planète à anneaux rendue une fois dans un canvas offscreen. */
+function buildPlanet() {
+  const r = Math.max(70, Math.min(innerWidth, innerHeight) * 0.17);
+  const size = Math.ceil(r * 4.2);
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = size;
+  const p = cv.getContext('2d');
+  p.translate(size / 2, size / 2);
+  const tilt = -0.42;
+  const ringBack = () => {
+    p.save(); p.rotate(tilt); p.scale(1, 0.28);
+    for (const [ri, ro, a] of [[1.35, 1.6, 0.55], [1.65, 1.95, 0.35], [2.0, 2.08, 0.25]]) {
+      p.beginPath(); p.arc(0, 0, r * ro, Math.PI, TAU); p.arc(0, 0, r * ri, TAU, Math.PI, true); p.closePath();
+      p.fillStyle = 'rgba(200,220,255,' + a + ')'; p.fill();
+    }
+    p.restore();
+  };
+  const ringFront = () => {
+    p.save(); p.rotate(tilt); p.scale(1, 0.28);
+    for (const [ri, ro, a] of [[1.35, 1.6, 0.7], [1.65, 1.95, 0.45], [2.0, 2.08, 0.3]]) {
+      p.beginPath(); p.arc(0, 0, r * ro, 0, Math.PI); p.arc(0, 0, r * ri, Math.PI, 0, true); p.closePath();
+      p.fillStyle = 'rgba(210,228,255,' + a + ')'; p.fill();
+    }
+    p.restore();
+  };
+  ringBack();
+  // Sphère : dégradé éclairé en haut à gauche, bandes nuageuses, terminateur sombre
+  const g = p.createRadialGradient(-r * 0.4, -r * 0.45, r * 0.1, 0, 0, r);
+  g.addColorStop(0, '#9b6cff'); g.addColorStop(0.45, '#4a2aa8'); g.addColorStop(0.8, '#1a1050'); g.addColorStop(1, '#070518');
+  p.beginPath(); p.arc(0, 0, r, 0, TAU); p.fillStyle = g; p.fill();
+  p.save(); p.beginPath(); p.arc(0, 0, r, 0, TAU); p.clip();
+  for (let i = 0; i < 9; i++) {
+    const y = -r + (i + 0.5) * (2 * r / 9);
+    p.fillStyle = i % 2 ? 'rgba(76,240,255,0.08)' : 'rgba(255,77,224,0.07)';
+    p.fillRect(-r, y - r * 0.05, 2 * r, r * 0.1 + Math.sin(i * 1.7) * r * 0.04);
+  }
+  const shade = p.createLinearGradient(-r, 0, r, 0);
+  shade.addColorStop(0, 'rgba(0,0,0,0)'); shade.addColorStop(0.55, 'rgba(0,0,0,0)'); shade.addColorStop(1, 'rgba(0,0,10,0.75)');
+  p.fillStyle = shade; p.fillRect(-r, -r, 2 * r, 2 * r);
+  p.restore();
+  // Atmosphère
+  p.beginPath(); p.arc(0, 0, r * 1.02, 0, TAU);
+  p.strokeStyle = 'rgba(140,200,255,0.55)'; p.lineWidth = r * 0.03;
+  p.shadowColor = 'rgba(120,200,255,0.9)'; p.shadowBlur = r * 0.25; p.stroke(); p.shadowBlur = 0;
+  ringFront();
+  planet = { canvas: cv, size, r, cx: innerWidth * 0.06 + r * 0.3, cy: innerHeight * 0.1 };
+}
+
+function drawPlanet(now) {
+  if (!planet) return;
+  const { canvas, size, r, cx, cy } = planet;
+  // Halo atmosphérique qui respire
+  const pulse = 0.5 + 0.5 * Math.sin(now / 2600);
+  const hg = bgCtx.createRadialGradient(cx, cy, r * 0.9, cx, cy, r * 1.9);
+  hg.addColorStop(0, 'rgba(110,80,255,' + (0.16 + 0.1 * pulse) + ')');
+  hg.addColorStop(1, 'rgba(110,80,255,0)');
+  bgCtx.fillStyle = hg;
+  bgCtx.beginPath(); bgCtx.arc(cx, cy, r * 1.9, 0, TAU); bgCtx.fill();
+  bgCtx.drawImage(canvas, cx - size / 2, cy - size / 2);
+  // Petite lune en orbite (passe derrière puis devant)
+  const a = now / 9000 * TAU;
+  const mx = cx + Math.cos(a) * r * 1.75, my = cy + Math.sin(a) * r * 0.5 + r * 0.15;
+  if (Math.sin(a) > 0) {
+    bgCtx.beginPath(); bgCtx.arc(mx, my, r * 0.09, 0, TAU);
+    bgCtx.fillStyle = '#dfe8ff'; bgCtx.shadowColor = '#bcd3ff'; bgCtx.shadowBlur = 12; bgCtx.fill(); bgCtx.shadowBlur = 0;
+  }
+}
 
 function initMotes() {
   stars = [];
@@ -442,6 +511,8 @@ function drawBg(now, dt) {
       }
     }
   }
+
+  drawPlanet(now);
 
   // Étoiles filantes, de temps en temps
   if (now > nextShooting) { spawnShooting(); nextShooting = now + 3500 + Math.random() * 6000; }
@@ -632,6 +703,16 @@ function drawWheel(now) {
     els.halo.style.opacity = '0';
   }
 
+  // Rayons divins derrière la roue : tournent lentement, s'entraînent avec la roue,
+  // s'intensifient avec la vitesse et le suspense
+  if (!state.reduced) {
+    const speedF = clamp(Math.abs(state.vel) / 30, 0, 1);
+    const d = Math.round(R * 2.7 * breath * zoom);
+    els.rays.style.width = els.rays.style.height = d + 'px';
+    els.rays.style.transform = 'translate(-50%, calc(-50% + ' + floatY.toFixed(1) + 'px)) rotate(' + (now / 45000 * TAU + state.rot * 0.3).toFixed(3) + 'rad)';
+    els.rays.style.opacity = (0.4 + 0.5 * Math.max(speedF, state.suspense, state.winner !== null ? 0.6 : 0)).toFixed(2);
+  }
+
   // Anneaux orbitaux et lunes qui gravitent autour du portail
   if (!state.reduced) {
     const orbits = [
@@ -646,6 +727,13 @@ function drawWheel(now) {
       c.stroke();
       c.setLineDash([]);
       const a = now * o.speed * TAU + state.rot * 0.15;
+      const dir = Math.sign(o.speed);
+      for (let k = 6; k >= 1; k--) {                     // traînée de la lune
+        const ak = a - dir * k * 0.06;
+        c.beginPath(); c.arc(Math.cos(ak) * o.r, Math.sin(ak) * o.r, o.moon * (1 - k / 8), 0, TAU);
+        c.fillStyle = 'rgba(' + o.col + ',' + (0.5 * (1 - k / 7)) + ')';
+        c.fill();
+      }
       const mx = Math.cos(a) * o.r, my = Math.sin(a) * o.r;
       c.beginPath(); c.arc(mx, my, o.moon, 0, TAU);
       c.fillStyle = '#fff';
@@ -724,6 +812,38 @@ function drawWheel(now) {
     c.globalCompositeOperation = 'source-over';
   }
 
+  // Dôme de verre : reflet fixe en haut du disque (espace non tourné)
+  if (!state.reduced) {
+    const dome = c.createLinearGradient(0, -Rw, 0, Rw * 0.1);
+    dome.addColorStop(0, 'rgba(255,255,255,0.2)');
+    dome.addColorStop(1, 'rgba(255,255,255,0)');
+    c.globalCompositeOperation = 'screen';
+    c.fillStyle = dome;
+    c.beginPath(); c.arc(0, 0, Rw, 0, TAU); c.fill();
+    c.globalCompositeOperation = 'source-over';
+  }
+
+  // Anneau d'énergie plasma : n'apparaît qu'en vitesse, tourne avec la roue
+  const plasma = state.reduced ? 0 : clamp(Math.abs(state.vel) / 28, 0, 1);
+  if (plasma > 0.02 && c.createConicGradient) {
+    const eg = c.createConicGradient(state.rot * 1.6, 0, 0);
+    for (let k = 0; k < 6; k++) {
+      eg.addColorStop(k / 6, k % 2 ? 'rgba(255,77,224,0)' : 'rgba(76,240,255,0)');
+      eg.addColorStop(k / 6 + 0.08, k % 2 ? 'rgba(255,77,224,0.9)' : 'rgba(76,240,255,0.9)');
+      eg.addColorStop(k / 6 + 0.16, 'rgba(255,255,255,0)');
+    }
+    c.save();
+    c.globalCompositeOperation = 'lighter';
+    c.globalAlpha = plasma * 0.85;
+    c.beginPath(); c.arc(0, 0, R * 1.01, 0, TAU);
+    c.strokeStyle = eg;
+    c.lineWidth = (R - Rw) * 1.9;
+    c.shadowColor = 'rgba(120,230,255,0.8)';
+    c.shadowBlur = R * 0.05;
+    c.stroke();
+    c.restore();
+  }
+
   // Anneau métallique + néon dont la teinte tourne
   const ringR = (Rw + R) / 2;
   const mg = c.createLinearGradient(0, -R, 0, R);
@@ -755,6 +875,24 @@ function drawWheel(now) {
   c.shadowBlur = Rh * 0.6;
   c.fill();
   c.shadowBlur = 0;
+  if (!state.reduced && c.createConicGradient) {          // vortex d'accrétion
+    const vg = c.createConicGradient(now / 600 + state.rot * 2.2, 0, 0);
+    vg.addColorStop(0, 'rgba(76,240,255,0)'); vg.addColorStop(0.12, 'rgba(76,240,255,0.6)');
+    vg.addColorStop(0.3, 'rgba(0,0,0,0)'); vg.addColorStop(0.5, 'rgba(255,77,224,0.55)');
+    vg.addColorStop(0.65, 'rgba(0,0,0,0)'); vg.addColorStop(0.85, 'rgba(123,44,255,0.6)');
+    vg.addColorStop(1, 'rgba(76,240,255,0)');
+    c.save();
+    c.beginPath(); c.arc(0, 0, Rh * 0.9, 0, TAU); c.clip();
+    c.globalCompositeOperation = 'screen';
+    c.fillStyle = vg;
+    c.fillRect(-Rh, -Rh, Rh * 2, Rh * 2);
+    const core = c.createRadialGradient(0, 0, 0, 0, 0, Rh * 0.5);
+    core.addColorStop(0, 'rgba(5,4,20,1)'); core.addColorStop(1, 'rgba(5,4,20,0)');
+    c.globalCompositeOperation = 'source-over';
+    c.fillStyle = core;
+    c.fillRect(-Rh, -Rh, Rh * 2, Rh * 2);
+    c.restore();
+  }
   c.beginPath(); c.arc(0, 0, Rh, 0, TAU);
   c.strokeStyle = 'rgba(120,230,255,0.75)';
   c.lineWidth = 2;
@@ -832,7 +970,7 @@ function burst(x, y, n, opts = {}) {
   for (let i = 0; i < n && confetti.length < 700; i++) {
     const a = base + (Math.random() - 0.5) * spread;
     const v = speed * (0.35 + Math.random() * 0.75);
-    const shapes = ['rect', 'rect', 'circle', 'tri', 'streamer'];
+    const shapes = opts.shapes || ['rect', 'rect', 'circle', 'tri', 'streamer', 'star'];
     confetti.push({
       x, y,
       vx: Math.cos(a) * v, vy: Math.sin(a) * v,
@@ -874,9 +1012,9 @@ function spawnSparks(n, vel) {
   }
 }
 
-function spawnWave() {
+function spawnWave(col = '255,255,255') {
   const wc = wheelCenter();
-  waves.push({ x: wc.x, y: wc.y, r: wc.R * 0.3, vr: innerWidth * 1.1, alpha: 0.75 });
+  waves.push({ x: wc.x, y: wc.y, r: wc.R * 0.3, vr: innerWidth * 1.1, alpha: 0.75, col });
 }
 
 function spawnRays(color, angle) {
@@ -941,7 +1079,7 @@ function drawFx(now, dt) {
     w.r += w.vr * dt;
     w.alpha -= dt * 1.1;
     if (w.alpha <= 0) { waves.splice(i, 1); continue; }
-    fctx.strokeStyle = `rgba(255,255,255,${w.alpha})`;
+    fctx.strokeStyle = `rgba(${w.col},${w.alpha})`;
     fctx.lineWidth = 5 * w.alpha + 1;
     fctx.beginPath();
     fctx.arc(w.x, w.y, w.r, 0, TAU);
@@ -973,6 +1111,14 @@ function drawFx(now, dt) {
       fctx.moveTo(0, -p.size * 0.6);
       fctx.lineTo(p.size * 0.55, p.size * 0.4);
       fctx.lineTo(-p.size * 0.55, p.size * 0.4);
+      fctx.closePath(); fctx.fill();
+    } else if (p.shape === 'star') {
+      fctx.beginPath();
+      for (let k = 0; k < 8; k++) {
+        const rr = k % 2 ? p.size * 0.28 : p.size * 0.8;
+        const ang = k * Math.PI / 4;
+        fctx.lineTo(Math.cos(ang) * rr, Math.sin(ang) * rr);
+      }
       fctx.closePath(); fctx.fill();
     } else if (p.shape === 'streamer') {
       fctx.fillRect(-p.size * 0.15, -p.size * 1.4, p.size * 0.3 * Math.abs(flip) + 0.5, p.size * 2.8);
@@ -1092,11 +1238,15 @@ function finishSpin(now) {
     els.flash.classList.remove('active');
     void els.flash.offsetWidth;
     els.flash.classList.add('active');
+    const { r: wr, g: wg, b: wb } = hexToRgb(seg.color);
     spawnWave();
-    setTimeout(spawnWave, 180);
+    setTimeout(() => spawnWave(wr + ',' + wg + ',' + wb), 180);
+    setTimeout(() => spawnWave('76,240,255'), 360);
 
     const screenAngle = norm(arcs[winner].mid + state.rot);
     spawnRays(seg.color, screenAngle);
+    // Supernova d'étoiles à la couleur du segment
+    burst(wheelCenter().x, wheelCenter().y, 60, { speed: 600, colors: [seg.color, '#ffffff', '#ffd75e'], shapes: ['star', 'star', 'circle'] });
 
     const wc = wheelCenter();
     const px = wc.x + Math.cos(screenAngle) * wc.R * 0.8;
@@ -1462,7 +1612,18 @@ function bindGlobal() {
     layoutFxCanvas(els.fx);
     layoutFxCanvas(els.bg);
     initMotes();
+    buildPlanet();
   });
+
+  // Parallaxe & lueur qui suivent la souris
+  addEventListener('pointermove', (e) => {
+    if (e.pointerType !== 'mouse' || state.reduced) return;
+    const root = document.documentElement.style;
+    root.setProperty('--px', ((e.clientX / innerWidth) - 0.5) * 2);
+    root.setProperty('--py', ((e.clientY / innerHeight) - 0.5) * 2);
+    root.setProperty('--mx', e.clientX + 'px');
+    root.setProperty('--my', e.clientY + 'px');
+  }, { passive: true });
 
   // Préférence "moins d'animations" changée à chaud
   reducedQuery.addEventListener?.('change', (e) => {
@@ -1511,6 +1672,7 @@ function init() {
   layoutFxCanvas(els.fx);
   layoutFxCanvas(els.bg);
   initMotes();
+  buildPlanet();
   layoutWheel();
 
   bindEditor();
