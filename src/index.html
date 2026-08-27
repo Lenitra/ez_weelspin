@@ -48,11 +48,16 @@
   </section>
 
   <!-- L'éditeur de segments -->
+  <div id="editor-scrim" aria-hidden="true"></div>
   <aside class="editor" id="editor" aria-label="Éditeur de segments">
     <fieldset id="editor-fields" class="editor-fields">
+      <div class="sheet-handle" aria-hidden="true"></div>
       <div class="editor-head">
         <h2>Segments <span id="seg-count" class="pill">0</span></h2>
-        <button id="btn-add" class="btn btn-primary btn-sm" aria-label="Ajouter un segment">＋ Ajouter</button>
+        <div class="editor-head-actions">
+          <button id="btn-add" class="btn btn-primary btn-sm" aria-label="Ajouter un segment">＋ Ajouter</button>
+          <button id="btn-editor-close" class="btn btn-icon btn-sm editor-close" aria-label="Fermer l'éditeur">✕</button>
+        </div>
       </div>
 
       <div id="seg-list" class="seg-list" aria-label="Liste des segments"></div>

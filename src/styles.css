@@ -19,10 +19,11 @@
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
+[hidden] { display: none !important; }
 
 html {
   /* Échelle fluide : lisible du téléphone à la TV 4K */
-  font-size: clamp(14px, 0.55vw + 11px, 24px);
+  font-size: clamp(14px, 0.6vw + 11px, 32px);
 }
 
 body {
@@ -118,7 +119,7 @@ body::before {
 .app {
   position: relative; z-index: 2;
   display: grid;
-  grid-template-columns: 1fr minmax(20rem, 24rem);
+  grid-template-columns: 1fr minmax(20rem, 26rem);
   gap: 1rem;
   height: calc(100svh - var(--topbar-h));
   padding: 0 1rem 1rem;
@@ -248,6 +249,8 @@ body.spinning #wheel { cursor: wait; }
 .editor-fields:disabled { opacity: 0.55; pointer-events: none; }
 
 .editor-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+.editor-head-actions { display: flex; gap: 0.4rem; }
+.editor-close, .sheet-handle, #editor-scrim { display: none; }
 .editor-head h2 { font-size: 1.05rem; display: flex; align-items: center; gap: 0.5rem; }
 .pill {
   font-size: 0.75rem; font-weight: 700;
@@ -465,20 +468,58 @@ body.presentation .editor,
 body.presentation .btn-spin { display: none; }
 body.presentation .app { grid-template-columns: 1fr; height: 100svh; padding: 0.5rem; }
 
-/* ---------- Responsive : mobile ---------- */
+/* ---------- Responsive : mobile & tablette (< 900px) ---------- */
 @media (max-width: 899px) {
   .app { grid-template-columns: 1fr; padding: 0 0.6rem 0.6rem; }
 
-  /* Éditeur en panneau qui remonte du bas */
+  /* Roue calée en haut, bouton Lancer juste dessous */
+  .stage { justify-content: flex-start; gap: 0.6rem; }
+  .wheel-wrap {
+    flex: 0 0 auto;
+    height: min(calc(100vw - 1.2rem), 62svh);
+  }
+
+  /* Éditeur en panneau qui remonte du bas, opaque et lisible */
   .editor {
-    position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
-    max-height: 72svh;
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 31;
+    max-height: 78svh;
+    background: rgba(16, 19, 34, 0.97);
     border-radius: 20px 20px 0 0;
+    border-bottom: 0;
     transform: translateY(105%);
     transition: transform 0.35s cubic-bezier(0.2, 0.9, 0.3, 1.05);
     animation: none;
+    box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.6);
   }
   body.editor-open .editor { transform: translateY(0); }
+  .editor-fields { padding-top: 0.5rem; }
+
+  /* Poignée, bouton fermer et fond cliquable */
+  .sheet-handle {
+    display: block; width: 3rem; height: 5px;
+    margin: 0.2rem auto 0.4rem;
+    border-radius: 999px; background: rgba(255, 255, 255, 0.25);
+  }
+  .editor-close { display: inline-flex; }
+  #editor-scrim {
+    display: block; position: fixed; inset: 0; z-index: 30;
+    background: rgba(3, 4, 12, 0.55);
+    opacity: 0; pointer-events: none;
+    transition: opacity 0.3s ease;
+  }
+  body.editor-open #editor-scrim { opacity: 1; pointer-events: auto; }
+}
+
+/* Paysage bas (téléphone couché) : on récupère de la hauteur */
+@media (max-height: 500px) and (max-width: 899px) {
+  :root { --topbar-h: 2.6rem; }
+  .wheel-wrap { height: min(calc(100vw - 1.2rem), 68svh); }
+}
+
+/* Très grand écran / TV : l'éditeur respire davantage */
+@media (min-width: 1800px) {
+  .app { gap: 1.5rem; padding: 0 1.5rem 1.5rem; }
+  .editor-fields { padding: 1.4rem; gap: 1rem; }
 }
 
 /* ---------- Accessibilité ---------- */

@@ -489,7 +489,7 @@ function rebuildWheelCache() {
   for (let i = 0; i < state.segments.length; i++) {
     const seg = state.segments[i];
     const { mid, span } = arcs[i];
-    const fontSize = clamp(Math.min(Rw * 0.085, span * Rw * 0.62 * 0.55), 0, 40);
+    const fontSize = clamp(Math.min(Rw * 0.075, span * Rw * 0.62 * 0.55), 0, 40);
     if (fontSize < 8.5) continue;
     c.save();
     c.rotate(mid);
@@ -497,7 +497,7 @@ function rebuildWheelCache() {
     c.textAlign = 'right';
     c.textBaseline = 'middle';
     c.fillStyle = textColorFor(seg.color);
-    const maxW = Rw * 0.55;
+    const maxW = Rw * 0.64;
     let label = seg.label || '—';
     if (c.measureText(label).width > maxW) {
       while (label.length > 1 && c.measureText(label + '…').width > maxW) label = label.slice(0, -1);
@@ -505,7 +505,7 @@ function rebuildWheelCache() {
     }
     c.shadowColor = 'rgba(0,0,0,0.35)';
     c.shadowBlur = 3;
-    c.fillText(label, Rw * 0.9, 0);
+    c.fillText(label, Rw * 0.92, 0);
     c.restore();
   }
 
@@ -1330,11 +1330,14 @@ function bindGlobal() {
   // Mute
   els.btnMute.addEventListener('click', () => { ensureAudio(); setMuted(!state.muted); });
 
-  // Éditeur : afficher / masquer
-  els.btnEditor.addEventListener('click', () => {
-    const open = document.body.classList.toggle('editor-open');
+  // Éditeur : afficher / masquer (topbar, bouton fermer du panneau, fond cliquable)
+  const setEditorOpen = (open) => {
+    document.body.classList.toggle('editor-open', open);
     els.btnEditor.setAttribute('aria-expanded', String(open));
-  });
+  };
+  els.btnEditor.addEventListener('click', () => setEditorOpen(!document.body.classList.contains('editor-open')));
+  $('btn-editor-close').addEventListener('click', () => setEditorOpen(false));
+  $('editor-scrim').addEventListener('click', () => setEditorOpen(false));
 
   // Mode présentation / plein écran
   els.btnPresent.addEventListener('click', () => setPresentation(true));
