@@ -385,54 +385,22 @@ let planet = null;       // { canvas, cx, cy, r, size }
 /** Planète à anneaux rendue une fois dans un canvas offscreen. */
 function buildPlanet() {
   const r = Math.max(70, Math.min(innerWidth, innerHeight) * 0.17);
-  const size = Math.ceil(r * 4.2);
-  const cv = document.createElement('canvas');
-  cv.width = cv.height = size;
-  const p = cv.getContext('2d');
-  p.translate(size / 2, size / 2);
-  const tilt = -0.42;
-  const ringBack = () => {
-    p.save(); p.rotate(tilt); p.scale(1, 0.28);
-    for (const [ri, ro, a] of [[1.35, 1.6, 0.55], [1.65, 1.95, 0.35], [2.0, 2.08, 0.25]]) {
-      p.beginPath(); p.arc(0, 0, r * ro, Math.PI, TAU); p.arc(0, 0, r * ri, TAU, Math.PI, true); p.closePath();
-      p.fillStyle = 'rgba(200,220,255,' + a + ')'; p.fill();
-    }
-    p.restore();
-  };
-  const ringFront = () => {
-    p.save(); p.rotate(tilt); p.scale(1, 0.28);
-    for (const [ri, ro, a] of [[1.35, 1.6, 0.7], [1.65, 1.95, 0.45], [2.0, 2.08, 0.3]]) {
-      p.beginPath(); p.arc(0, 0, r * ro, 0, Math.PI); p.arc(0, 0, r * ri, Math.PI, 0, true); p.closePath();
-      p.fillStyle = 'rgba(210,228,255,' + a + ')'; p.fill();
-    }
-    p.restore();
-  };
-  ringBack();
-  // Sphère : dégradé éclairé en haut à gauche, bandes nuageuses, terminateur sombre
-  const g = p.createRadialGradient(-r * 0.4, -r * 0.45, r * 0.1, 0, 0, r);
-  g.addColorStop(0, '#9b6cff'); g.addColorStop(0.45, '#4a2aa8'); g.addColorStop(0.8, '#1a1050'); g.addColorStop(1, '#070518');
-  p.beginPath(); p.arc(0, 0, r, 0, TAU); p.fillStyle = g; p.fill();
-  p.save(); p.beginPath(); p.arc(0, 0, r, 0, TAU); p.clip();
-  for (let i = 0; i < 9; i++) {
-    const y = -r + (i + 0.5) * (2 * r / 9);
-    p.fillStyle = i % 2 ? 'rgba(76,240,255,0.08)' : 'rgba(255,77,224,0.07)';
-    p.fillRect(-r, y - r * 0.05, 2 * r, r * 0.1 + Math.sin(i * 1.7) * r * 0.04);
-  }
-  const shade = p.createLinearGradient(-r, 0, r, 0);
-  shade.addColorStop(0, 'rgba(0,0,0,0)'); shade.addColorStop(0.55, 'rgba(0,0,0,0)'); shade.addColorStop(1, 'rgba(0,0,10,0.75)');
-  p.fillStyle = shade; p.fillRect(-r, -r, 2 * r, 2 * r);
-  p.restore();
-  // Atmosphère
-  p.beginPath(); p.arc(0, 0, r * 1.02, 0, TAU);
-  p.strokeStyle = 'rgba(140,200,255,0.55)'; p.lineWidth = r * 0.03;
-  p.shadowColor = 'rgba(120,200,255,0.9)'; p.shadowBlur = r * 0.25; p.stroke(); p.shadowBlur = 0;
-  ringFront();
-  planet = { canvas: cv, size, r, cx: innerWidth * 0.06 + r * 0.3, cy: innerHeight * 0.1 };
+  planet = { r, cx: innerWidth * 0.06 + r * 0.3, cy: innerHeight * 0.1 };
+  initAsteroids();
 }
 
 function drawPlanet(now) {
   if (!planet) return;
-  const { canvas, size, r, cx, cy } = planet;
+  const { r, cx, cy } = planet;
+  // Sphère fil de fer + anneaux, en vraie rotation 3D
+  wireSphere(bgCtx, cx, cy, r, 0.42, now / 14000 * TAU, {
+    col: '170,140,255', lats: 6, lons: 12, rings: [1.45, 1.6, 1.85],
+    aBack: 0.1, aFront: 0.55, width: 1.2 * wireScale(),
+  });
+  // Cœur lumineux
+  const cg = bgCtx.createRadialGradient(cx, cy, 0, cx, cy, r);
+  cg.addColorStop(0, 'rgba(123,44,255,0.35)'); cg.addColorStop(1, 'rgba(123,44,255,0)');
+  bgCtx.fillStyle = cg; bgCtx.beginPath(); bgCtx.arc(cx, cy, r, 0, TAU); bgCtx.fill();
   // Halo atmosphérique qui respire
   const pulse = 0.5 + 0.5 * Math.sin(now / 2600);
   const hg = bgCtx.createRadialGradient(cx, cy, r * 0.9, cx, cy, r * 1.9);
@@ -440,7 +408,6 @@ function drawPlanet(now) {
   hg.addColorStop(1, 'rgba(110,80,255,0)');
   bgCtx.fillStyle = hg;
   bgCtx.beginPath(); bgCtx.arc(cx, cy, r * 1.9, 0, TAU); bgCtx.fill();
-  bgCtx.drawImage(canvas, cx - size / 2, cy - size / 2);
   // Petite lune en orbite (passe derrière puis devant)
   const a = now / 9000 * TAU;
   const mx = cx + Math.cos(a) * r * 1.75, my = cy + Math.sin(a) * r * 0.5 + r * 0.15;
@@ -481,6 +448,8 @@ function drawBg(now, dt) {
   bgCtx.clearRect(0, 0, innerWidth, innerHeight);
   if (state.reduced) return;
 
+  drawGrid(now, dt);
+
   // Warp : les étoiles s'étirent depuis le centre de la roue selon sa vitesse
   const warp = clamp(Math.abs(state.vel) / 30, 0, 1);
   const wc = warp > 0.02 ? wheelCenter() : null;
@@ -513,6 +482,8 @@ function drawBg(now, dt) {
   }
 
   drawPlanet(now);
+  drawAsteroids(now, dt);
+  drawCage(bgCtx, now, false);
 
   // Étoiles filantes, de temps en temps
   if (now > nextShooting) { spawnShooting(); nextShooting = now + 3500 + Math.random() * 6000; }
@@ -533,6 +504,176 @@ function drawBg(now, dt) {
     bgCtx.lineTo(m.x - m.vx * tail, m.y - m.vy * tail);
     bgCtx.stroke();
   }
+}
+
+/* ============================ 5b. Wireframe 3D ========================== */
+/* Petit moteur fil de fer : rotation 3D, projection perspective, alpha selon
+   la profondeur. Tout est dessiné en lignes fines lumineuses (hologramme). */
+
+/** Facteur d'échelle des traits/objets fil de fer selon la taille d'écran (TV 4K). */
+const wireScale = () => clamp(Math.min(innerWidth, innerHeight) / 800, 1, 2.6);
+
+function rot3(p, ax, ay, az) {
+  let [x, y, z] = p;
+  let c = Math.cos(ax), s = Math.sin(ax);
+  [y, z] = [y * c - z * s, y * s + z * c];
+  c = Math.cos(ay); s = Math.sin(ay);
+  [x, z] = [x * c + z * s, -x * s + z * c];
+  c = Math.cos(az); s = Math.sin(az);
+  [x, y] = [x * c - y * s, x * s + y * c];
+  return [x, y, z];
+}
+
+/** Projette un point 3D (z vers le spectateur) : retourne [sx, sy, depth -1..1]. */
+function project(p, cx, cy, f, radius) {
+  const s = f / (f - p[2]);
+  return [cx + p[0] * s, cy + p[1] * s, p[2] / radius];
+}
+
+/** Trace une polyligne 3D en découpant par profondeur (avant / arrière). */
+function wirePath(ctx, pts, cx, cy, f, radius, col, aBack, aFront, onlyFront, onlyBack, width = 1) {
+  let prev = project(pts[0], cx, cy, f, radius);
+  ctx.lineWidth = width;
+  for (let i = 1; i < pts.length; i++) {
+    const cur = project(pts[i], cx, cy, f, radius);
+    const d = (prev[2] + cur[2]) / 2;
+    const front = d > 0;
+    if ((onlyFront && !front) || (onlyBack && front)) { prev = cur; continue; }
+    const a = front ? aFront * (0.55 + 0.45 * d) : aBack * (0.35 + 0.65 * (1 + d));
+    ctx.strokeStyle = 'rgba(' + col + ',' + a.toFixed(3) + ')';
+    ctx.beginPath(); ctx.moveTo(prev[0], prev[1]); ctx.lineTo(cur[0], cur[1]); ctx.stroke();
+    prev = cur;
+  }
+}
+
+/** Cercle 3D dans un plan donné (lat = parallèle, lon = méridien). */
+function circle3(r, n, kind, k) {
+  const pts = [];
+  for (let i = 0; i <= n; i++) {
+    const t = i / n * TAU;
+    if (kind === 'lat') pts.push([Math.cos(t) * r * Math.cos(k), Math.sin(k) * r, Math.sin(t) * r * Math.cos(k)]);
+    else pts.push(rot3([Math.cos(t) * r, Math.sin(t) * r, 0], 0, k, 0));
+  }
+  return pts;
+}
+
+/** Sphère fil de fer (parallèles + méridiens), éventuellement avec anneaux. */
+function wireSphere(ctx, cx, cy, r, ax, ay, opts) {
+  const { col = '76,240,255', aBack = 0.12, aFront = 0.45, lats = 5, lons = 10, rings = [], onlyFront = false, onlyBack = false, width = 1 } = opts;
+  const f = r * 4.5;
+  const paths = [];
+  for (let i = 1; i <= lats; i++) paths.push(circle3(r, 40, 'lat', -Math.PI / 2 + i * Math.PI / (lats + 1)));
+  for (let i = 0; i < lons; i++) paths.push(circle3(r, 40, 'lon', i * Math.PI / lons));
+  for (const rr of rings) paths.push(circle3(r * rr, 64, 'lat', 0));
+  for (const path of paths) {
+    const pts = path.map((p) => rot3(p, ax, ay, 0));
+    wirePath(ctx, pts, cx, cy, f, r, col, aBack, aFront, onlyFront, onlyBack, width);
+  }
+}
+
+/* Icosaèdre : sommets + arêtes (astéroïdes) */
+const ICO_V = (() => {
+  const t = (1 + Math.sqrt(5)) / 2, v = [];
+  for (const s of [-1, 1]) for (const u of [-1, 1]) { v.push([0, s, u * t]); v.push([s, u * t, 0]); v.push([u * t, 0, s]); }
+  const n = Math.hypot(1, t);
+  return v.map((p) => p.map((x) => x / n));
+})();
+const ICO_E = (() => {
+  const e = [];
+  for (let i = 0; i < 12; i++) for (let j = i + 1; j < 12; j++) {
+    const d = Math.hypot(ICO_V[i][0] - ICO_V[j][0], ICO_V[i][1] - ICO_V[j][1], ICO_V[i][2] - ICO_V[j][2]);
+    if (d < 1.1) e.push([i, j]);
+  }
+  return e;
+})();
+
+let asteroids = [];
+function initAsteroids() {
+  asteroids = [];
+  if (state.reduced) return;
+  const n = innerWidth < 900 ? 3 : 5;
+  for (let i = 0; i < n; i++) {
+    asteroids.push({
+      x: Math.random() * innerWidth, y: Math.random() * innerHeight,
+      r: (14 + Math.random() * 26) * wireScale(),
+      vx: (Math.random() - 0.5) * 12, vy: (Math.random() - 0.5) * 8,
+      ax: Math.random() * TAU, ay: Math.random() * TAU,
+      sx: (Math.random() - 0.5) * 0.6, sy: (Math.random() - 0.5) * 0.8,
+      col: Math.random() < 0.5 ? '76,240,255' : '255,77,224',
+    });
+  }
+}
+
+function drawAsteroids(now, dt) {
+  for (const a of asteroids) {
+    a.x += a.vx * dt; a.y += a.vy * dt;
+    if (a.x < -60) a.x = innerWidth + 60; if (a.x > innerWidth + 60) a.x = -60;
+    if (a.y < -60) a.y = innerHeight + 60; if (a.y > innerHeight + 60) a.y = -60;
+    const ax = a.ax + now / 1000 * a.sx, ay = a.ay + now / 1000 * a.sy;
+    const pts = ICO_V.map((p) => rot3([p[0] * a.r, p[1] * a.r, p[2] * a.r], ax, ay, 0));
+    const f = a.r * 5;
+    bgCtx.lineWidth = wireScale();
+    for (const [i, j] of ICO_E) {
+      const p = project(pts[i], a.x, a.y, f, a.r), q = project(pts[j], a.x, a.y, f, a.r);
+      const d = (p[2] + q[2]) / 2;
+      bgCtx.strokeStyle = 'rgba(' + a.col + ',' + (0.18 + 0.32 * (d + 1) / 2).toFixed(3) + ')';
+      bgCtx.beginPath(); bgCtx.moveTo(p[0], p[1]); bgCtx.lineTo(q[0], q[1]); bgCtx.stroke();
+    }
+    // Sommets lumineux
+    bgCtx.fillStyle = 'rgba(' + a.col + ',0.9)';
+    for (const p of pts) { if (p[2] > 0) { const s = project(p, a.x, a.y, f, a.r); bgCtx.fillRect(s[0] - 1, s[1] - 1, 2, 2); } }
+  }
+}
+
+/** Sol en grille perspective (synthwave) qui défile ; accélère avec la roue. */
+let gridPhase = 0;
+function drawGrid(now, dt) {
+  const W = innerWidth, H = innerHeight;
+  const hy = H * 0.58;                                  // horizon
+  const speed = 0.35 + clamp(Math.abs(state.vel) / 30, 0, 1) * 3;
+  gridPhase = (gridPhase + dt * speed) % 1;
+  bgCtx.save();
+  bgCtx.beginPath(); bgCtx.rect(0, hy, W, H - hy); bgCtx.clip();
+  bgCtx.lineWidth = wireScale();
+  // Lignes horizontales : profondeur t (0 = horizon, 1 = bord bas), espacement en t^3
+  const rows = 14;
+  for (let i = 0; i < rows; i++) {
+    const t = Math.pow((i + gridPhase) / rows, 3);
+    const y = hy + (H - hy) * t;
+    bgCtx.strokeStyle = 'rgba(76,240,255,' + (0.05 + 0.3 * t).toFixed(3) + ')';
+    bgCtx.beginPath(); bgCtx.moveTo(0, y); bgCtx.lineTo(W, y); bgCtx.stroke();
+  }
+  // Lignes verticales convergeant vers le point de fuite
+  const cols = 18;
+  const vx = W / 2 + (parseFloat(document.documentElement.style.getPropertyValue('--px')) || 0) * -W * 0.05;
+  for (let i = -cols; i <= cols; i++) {
+    const xb = W / 2 + i * (W * 1.6 / cols);
+    const g = bgCtx.createLinearGradient(vx, hy, xb, H);
+    g.addColorStop(0, 'rgba(255,77,224,0)');
+    g.addColorStop(1, 'rgba(255,77,224,0.28)');
+    bgCtx.strokeStyle = g;
+    bgCtx.beginPath(); bgCtx.moveTo(vx, hy); bgCtx.lineTo(xb, H); bgCtx.stroke();
+  }
+  // Lueur d'horizon
+  const hg = bgCtx.createLinearGradient(0, hy, 0, hy + H * 0.25);
+  hg.addColorStop(0, 'rgba(76,240,255,0.16)'); hg.addColorStop(1, 'rgba(76,240,255,0)');
+  bgCtx.fillStyle = hg; bgCtx.fillRect(0, hy, W, H * 0.25);
+  bgCtx.restore();
+}
+
+/** Cage holographique autour de la roue : sphère fil de fer en rotation.
+    Moitié arrière sur le fond, moitié avant (discrète) sur le canvas d'effets. */
+function drawCage(ctx, now, front) {
+  if (!cssSize || !state.segments.length) return;
+  const wc = wheelCenter();
+  const r = wc.R * 1.24;
+  const ay = now / 9000 * TAU + state.rot * 0.2;
+  const ax = 0.35 + Math.sin(now / 6000) * 0.15;
+  wireSphere(ctx, wc.x, wc.y, r, ax, ay, {
+    col: '120,220,255', lats: 4, lons: 8, width: wireScale(),
+    aBack: 0.28, aFront: 0.13,
+    onlyFront: front, onlyBack: !front,
+  });
 }
 
 /* ============================ 6. Rendu de la roue ========================= */
@@ -1027,6 +1168,7 @@ function drawFx(now, dt) {
   const dpr = Math.min(devicePixelRatio || 1, 2);
   fctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   fctx.clearRect(0, 0, innerWidth, innerHeight);
+  if (!state.reduced) drawCage(fctx, now, true);
   if (!hasWork) return;
 
   // Rayons lumineux (additifs) qui partent du segment gagnant
