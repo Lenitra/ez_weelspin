@@ -53,6 +53,38 @@ const state = {
   suspense: 0,         // 0..1, intensité du suspense de fin de course
 };
 
+/* Qualité du rendu. Passe en "low" automatiquement si la machine ne tient pas
+   60 fps (rendu logiciel, machine sans GPU) : on coupe alors les effets les
+   plus coûteux en remplissage plutôt que de laisser ramer. */
+const Q = { low: false };
+
+function setLowQuality() {
+  if (Q.low) return;
+  Q.low = true;
+  document.body.classList.add('low-fx');
+  layoutWheel();                       // redessine la roue à la résolution réduite
+  asteroids = [];
+  initMotes();
+  toast('Effets allégés pour rester fluide.');
+}
+
+let perfWindow = 0, perfFrames = 0, perfBad = 0, perfStart = 0;
+function monitorPerf(now) {
+  if (Q.low || state.reduced) return;
+  if (!perfStart) { perfStart = now; perfWindow = now; return; }
+  if (now - perfStart < 3000) { perfWindow = now; perfFrames = 0; return; }  // on ignore le démarrage
+  perfFrames++;
+  if (now - perfWindow < 1000) return;
+  const fps = perfFrames * 1000 / (now - perfWindow);
+  perfWindow = now; perfFrames = 0;
+  // On exige un problème SOUTENU : un creux isolé (rafale de confettis, GC)
+  // ne doit pas dégrader définitivement une machine par ailleurs capable.
+  if (fps < 28) perfBad += 2;
+  else if (fps < 45) perfBad += 1;
+  else perfBad = 0;
+  if (perfBad >= 4) setLowQuality();
+}
+
 let spin = null;       // animation en cours : {t0, rot0, delta, TA, TM, recoil, winner}
 let arcs = [];         // géométrie des segments : [{a0, a1, mid, span}]
 
@@ -419,61 +451,73 @@ function sndUi(kind) {
 
 /* ============================ 5. Fond animé : champ d'étoiles ============ */
 
-const bgCtx = els.bg.getContext('2d');
-let stars = [];          // trois profondeurs (z) pour la parallaxe
+const bgCtx = els.bg.getContext('2d', { alpha: true });
+let starGroups = [];     // étoiles regroupées par couleur : un seul fillStyle par groupe
 let shooting = [];       // étoiles filantes
 let nextShooting = 0;
-let planet = null;       // { canvas, cx, cy, r, size }
+let planet = null;       // { r, cx, cy }
+let bgCache = {};        // dégradés recalculés seulement au redimensionnement
 
-/** Planète à anneaux rendue une fois dans un canvas offscreen. */
+/** Facteur d'échelle des traits fil de fer selon la taille d'écran. */
+const wireScale = () => clamp(Math.min(innerWidth, innerHeight) / 800, 1, 2.2);
+
+/** Dégradés du décor, coûteux à créer : construits une fois par taille d'écran. */
+function rebuildBgCache() {
+  const H = innerHeight, hy = H * 0.58;
+  const fade = bgCtx.createLinearGradient(0, hy, 0, H);
+  fade.addColorStop(0, 'rgba(0,0,0,0.92)');
+  fade.addColorStop(0.35, 'rgba(0,0,0,0.45)');
+  fade.addColorStop(1, 'rgba(0,0,0,0)');
+  const glow = bgCtx.createLinearGradient(0, hy, 0, hy + H * 0.25);
+  glow.addColorStop(0, 'rgba(76,240,255,0.16)');
+  glow.addColorStop(1, 'rgba(76,240,255,0)');
+  bgCache = { hy, fade, glow };
+}
+
 function buildPlanet() {
   const r = Math.max(70, Math.min(innerWidth, innerHeight) * 0.17);
   planet = { r, cx: innerWidth * 0.06 + r * 0.3, cy: innerHeight * 0.1 };
   initAsteroids();
+  rebuildBgCache();
 }
 
 function drawPlanet(now) {
-  if (!planet) return;
+  if (!planet || Q.low) return;
   const { r, cx, cy } = planet;
-  // Sphère fil de fer + anneaux, en vraie rotation 3D
   wireSphere(bgCtx, cx, cy, r, 0.42, now / 14000 * TAU, {
-    col: '170,140,255', lats: 6, lons: 12, rings: [1.45, 1.6, 1.85],
-    aBack: 0.1, aFront: 0.55, width: 1.2 * wireScale(),
+    col: '170,140,255', lats: 4, lons: 8, rings: [1.45, 1.75],
+    aBack: 0.1, aFront: 0.5, width: 1.2 * wireScale(),
   });
-  // Cœur lumineux
-  const cg = bgCtx.createRadialGradient(cx, cy, 0, cx, cy, r);
-  cg.addColorStop(0, 'rgba(123,44,255,0.35)'); cg.addColorStop(1, 'rgba(123,44,255,0)');
-  bgCtx.fillStyle = cg; bgCtx.beginPath(); bgCtx.arc(cx, cy, r, 0, TAU); bgCtx.fill();
-  // Halo atmosphérique qui respire
-  const pulse = 0.5 + 0.5 * Math.sin(now / 2600);
-  const hg = bgCtx.createRadialGradient(cx, cy, r * 0.9, cx, cy, r * 1.9);
-  hg.addColorStop(0, 'rgba(110,80,255,' + (0.16 + 0.1 * pulse) + ')');
-  hg.addColorStop(1, 'rgba(110,80,255,0)');
-  bgCtx.fillStyle = hg;
-  bgCtx.beginPath(); bgCtx.arc(cx, cy, r * 1.9, 0, TAU); bgCtx.fill();
   // Petite lune en orbite (passe derrière puis devant)
   const a = now / 9000 * TAU;
-  const mx = cx + Math.cos(a) * r * 1.75, my = cy + Math.sin(a) * r * 0.5 + r * 0.15;
   if (Math.sin(a) > 0) {
-    bgCtx.beginPath(); bgCtx.arc(mx, my, r * 0.09, 0, TAU);
-    bgCtx.fillStyle = '#dfe8ff'; bgCtx.shadowColor = '#bcd3ff'; bgCtx.shadowBlur = 12; bgCtx.fill(); bgCtx.shadowBlur = 0;
+    bgCtx.beginPath();
+    bgCtx.arc(cx + Math.cos(a) * r * 1.75, cy + Math.sin(a) * r * 0.5 + r * 0.15, r * 0.09, 0, TAU);
+    bgCtx.fillStyle = '#dfe8ff';
+    bgCtx.fill();
   }
 }
 
+/** Champ d'étoiles : regroupées par couleur pour limiter les changements d'état. */
 function initMotes() {
-  stars = [];
+  starGroups = [];
   if (state.reduced) return;
-  const n = Math.min(320, Math.round(innerWidth * innerHeight / 6500));
+  const div = Q.low ? 22000 : 11000;
+  const n = Math.min(Q.low ? 90 : 190, Math.round(innerWidth * innerHeight / div));
+  const groups = new Map();
   for (let i = 0; i < n; i++) {
     const z = 0.25 + Math.random() * 0.75;          // profondeur : petit/lent -> gros/rapide
-    stars.push({
+    const hue = Math.random() < 0.15 ? 300 : Math.random() < 0.5 ? 195 : 45;
+    const sat = Math.random() < 0.6 ? 0 : 70;
+    const key = hue + '/' + sat;
+    if (!groups.has(key)) groups.set(key, { css: `hsl(${hue},${sat}%,92%)`, list: [] });
+    groups.get(key).list.push({
       x: Math.random() * innerWidth, y: Math.random() * innerHeight, z,
-      r: 0.4 + z * 1.6,
+      r: 0.8 + z * 1.8,
       ph: Math.random() * TAU, tw: 0.6 + Math.random() * 2.2,
-      hue: Math.random() < 0.15 ? 300 : Math.random() < 0.5 ? 195 : 45, // magenta / cyan / or
-      sat: Math.random() < 0.6 ? 0 : 70,
     });
   }
+  starGroups = [...groups.values()];
 }
 
 function spawnShooting() {
@@ -486,47 +530,47 @@ function spawnShooting() {
 }
 
 function drawBg(now, dt) {
-  const dpr = Math.min(devicePixelRatio || 1, 2);
+  const dpr = els.bg._dpr || 1;
   bgCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
   bgCtx.clearRect(0, 0, innerWidth, innerHeight);
   if (state.reduced) return;
 
-  drawGrid(now, dt);
+  drawGrid();
 
   // Warp : les étoiles s'étirent depuis le centre de la roue selon sa vitesse
   const warp = clamp(Math.abs(state.vel) / 30, 0, 1);
-  const wc = warp > 0.02 ? wheelCenter() : null;
+  const wc = warp > 0.05 ? wheelCenter() : null;
+  const t = now / 1000;
 
-  for (const s of stars) {
-    s.y += s.z * 3 * dt;                                     // dérive lente vers le bas
-    if (s.y > innerHeight + 4) { s.y = -4; s.x = Math.random() * innerWidth; }
-    const twinkle = 0.55 + 0.45 * Math.sin(now / 1000 * s.tw + s.ph);
-    const a = clamp((0.25 + 0.6 * s.z) * twinkle + warp * 0.3, 0, 1);
-    bgCtx.fillStyle = bgCtx.strokeStyle = 'hsla(' + s.hue + ',' + s.sat + '%,' + (85 + s.z * 10) + '%,' + a + ')';
+  for (const g of starGroups) {
+    bgCtx.fillStyle = bgCtx.strokeStyle = g.css;
     if (wc) {
-      const dx = s.x - wc.x, dy = s.y - wc.y;
-      const len = warp * warp * s.z * 0.35;
-      bgCtx.lineWidth = s.r * 1.2;
+      // Traînées : un seul chemin et un seul stroke pour tout le groupe
+      const len = warp * warp * 0.3;
+      bgCtx.globalAlpha = clamp(0.35 + warp * 0.4, 0, 1);
+      bgCtx.lineWidth = 1.3;
       bgCtx.beginPath();
-      bgCtx.moveTo(s.x, s.y);
-      bgCtx.lineTo(s.x + dx * len, s.y + dy * len);
+      for (const s of g.list) {
+        s.y += s.z * 3 * dt;
+        if (s.y > innerHeight + 4) { s.y = -4; s.x = Math.random() * innerWidth; }
+        bgCtx.moveTo(s.x, s.y);
+        bgCtx.lineTo(s.x + (s.x - wc.x) * len * s.z, s.y + (s.y - wc.y) * len * s.z);
+      }
       bgCtx.stroke();
     } else {
-      bgCtx.beginPath();
-      bgCtx.arc(s.x, s.y, s.r, 0, TAU);
-      bgCtx.fill();
-      if (s.z > 0.85) {                                      // éclat en croix sur les grosses
-        bgCtx.globalAlpha = a * 0.5;
-        bgCtx.fillRect(s.x - s.r * 4, s.y - 0.4, s.r * 8, 0.8);
-        bgCtx.fillRect(s.x - 0.4, s.y - s.r * 4, 0.8, s.r * 8);
-        bgCtx.globalAlpha = 1;
+      for (const s of g.list) {
+        s.y += s.z * 3 * dt;
+        if (s.y > innerHeight + 4) { s.y = -4; s.x = Math.random() * innerWidth; }
+        bgCtx.globalAlpha = clamp((0.3 + 0.6 * s.z) * (0.55 + 0.45 * Math.sin(t * s.tw + s.ph)), 0, 1);
+        bgCtx.fillRect(s.x, s.y, s.r, s.r);      // carré : bien moins cher qu'un arc
       }
     }
   }
+  bgCtx.globalAlpha = 1;
 
   drawPlanet(now);
   drawAsteroids(now, dt);
-  drawCage(bgCtx, now, false);
+  if (!Q.low) drawCage(bgCtx, now, false);
   drawReticle(now);
 
   // Étoiles filantes, de temps en temps
@@ -537,56 +581,54 @@ function drawBg(now, dt) {
     if (m.life > m.ttl) { shooting.splice(i, 1); continue; }
     m.x += m.vx * dt; m.y += m.vy * dt;
     const tail = 0.12;
-    const fade = Math.sin(Math.PI * m.life / m.ttl);
-    const g = bgCtx.createLinearGradient(m.x, m.y, m.x - m.vx * tail, m.y - m.vy * tail);
-    g.addColorStop(0, 'rgba(255,255,255,' + 0.95 * fade + ')');
-    g.addColorStop(1, 'rgba(120,220,255,0)');
-    bgCtx.strokeStyle = g;
+    bgCtx.globalAlpha = Math.sin(Math.PI * m.life / m.ttl);
+    bgCtx.strokeStyle = '#cfefff';
     bgCtx.lineWidth = 2;
     bgCtx.beginPath();
     bgCtx.moveTo(m.x, m.y);
     bgCtx.lineTo(m.x - m.vx * tail, m.y - m.vy * tail);
     bgCtx.stroke();
   }
+  bgCtx.globalAlpha = 1;
 }
 
 /* ============================ 5b. Wireframe 3D ========================== */
-/* Petit moteur fil de fer : rotation 3D, projection perspective, alpha selon
-   la profondeur. Tout est dessiné en lignes fines lumineuses (hologramme). */
+/* Moteur fil de fer minimal : rotation 3D, projection perspective, et tracé
+   groupé (un seul stroke pour l'avant, un seul pour l'arrière) — c'est ce
+   groupage qui rend l'ensemble tenable sans GPU. */
 
-/** Facteur d'échelle des traits/objets fil de fer selon la taille d'écran (TV 4K). */
-const wireScale = () => clamp(Math.min(innerWidth, innerHeight) / 800, 1, 2.6);
-
-function rot3(p, ax, ay, az) {
+function rot3(p, ax, ay) {
   let [x, y, z] = p;
   let c = Math.cos(ax), s = Math.sin(ax);
   [y, z] = [y * c - z * s, y * s + z * c];
   c = Math.cos(ay); s = Math.sin(ay);
   [x, z] = [x * c + z * s, -x * s + z * c];
-  c = Math.cos(az); s = Math.sin(az);
-  [x, y] = [x * c - y * s, x * s + y * c];
   return [x, y, z];
 }
 
-/** Projette un point 3D (z vers le spectateur) : retourne [sx, sy, depth -1..1]. */
-function project(p, cx, cy, f, radius) {
-  const s = f / (f - p[2]);
-  return [cx + p[0] * s, cy + p[1] * s, p[2] / radius];
-}
-
-/** Trace une polyligne 3D en découpant par profondeur (avant / arrière). */
-function wirePath(ctx, pts, cx, cy, f, radius, col, aBack, aFront, onlyFront, onlyBack, width = 1) {
-  let prev = project(pts[0], cx, cy, f, radius);
-  ctx.lineWidth = width;
-  for (let i = 1; i < pts.length; i++) {
-    const cur = project(pts[i], cx, cy, f, radius);
-    const d = (prev[2] + cur[2]) / 2;
-    const front = d > 0;
-    if ((onlyFront && !front) || (onlyBack && front)) { prev = cur; continue; }
-    const a = front ? aFront * (0.55 + 0.45 * d) : aBack * (0.35 + 0.65 * (1 + d));
-    ctx.strokeStyle = 'rgba(' + col + ',' + a.toFixed(3) + ')';
-    ctx.beginPath(); ctx.moveTo(prev[0], prev[1]); ctx.lineTo(cur[0], cur[1]); ctx.stroke();
-    prev = cur;
+/**
+ * Trace une liste de polylignes 3D en DEUX passes seulement (arrière puis avant),
+ * au lieu d'un stroke par segment.
+ */
+function wireStroke(ctx, paths, cx, cy, f, col, aBack, aFront, width, onlyFront, onlyBack) {
+  for (const front of [false, true]) {
+    if (front ? onlyBack : onlyFront) continue;
+    const alpha = front ? aFront : aBack;
+    if (alpha <= 0.01) continue;
+    ctx.strokeStyle = 'rgba(' + col + ',' + alpha + ')';
+    ctx.lineWidth = width;
+    ctx.beginPath();
+    for (const pts of paths) {
+      let pen = false;
+      for (let i = 1; i < pts.length; i++) {
+        const p = pts[i - 1], q = pts[i];
+        if ((p[2] + q[2] > 0) !== front) { pen = false; continue; }
+        const sp = f / (f - p[2]), sq = f / (f - q[2]);
+        if (!pen) { ctx.moveTo(cx + p[0] * sp, cy + p[1] * sp); pen = true; }
+        ctx.lineTo(cx + q[0] * sq, cy + q[1] * sq);
+      }
+    }
+    ctx.stroke();
   }
 }
 
@@ -596,23 +638,22 @@ function circle3(r, n, kind, k) {
   for (let i = 0; i <= n; i++) {
     const t = i / n * TAU;
     if (kind === 'lat') pts.push([Math.cos(t) * r * Math.cos(k), Math.sin(k) * r, Math.sin(t) * r * Math.cos(k)]);
-    else pts.push(rot3([Math.cos(t) * r, Math.sin(t) * r, 0], 0, k, 0));
+    else pts.push(rot3([Math.cos(t) * r, Math.sin(t) * r, 0], 0, k));
   }
   return pts;
 }
 
 /** Sphère fil de fer (parallèles + méridiens), éventuellement avec anneaux. */
 function wireSphere(ctx, cx, cy, r, ax, ay, opts) {
-  const { col = '76,240,255', aBack = 0.12, aFront = 0.45, lats = 5, lons = 10, rings = [], onlyFront = false, onlyBack = false, width = 1 } = opts;
-  const f = r * 4.5;
+  const { col = '76,240,255', aBack = 0.12, aFront = 0.45, lats = 4, lons = 8,
+          rings = [], onlyFront = false, onlyBack = false, width = 1 } = opts;
+  const SEG = 20;                                   // 20 segments suffisent visuellement
   const paths = [];
-  for (let i = 1; i <= lats; i++) paths.push(circle3(r, 40, 'lat', -Math.PI / 2 + i * Math.PI / (lats + 1)));
-  for (let i = 0; i < lons; i++) paths.push(circle3(r, 40, 'lon', i * Math.PI / lons));
-  for (const rr of rings) paths.push(circle3(r * rr, 64, 'lat', 0));
-  for (const path of paths) {
-    const pts = path.map((p) => rot3(p, ax, ay, 0));
-    wirePath(ctx, pts, cx, cy, f, r, col, aBack, aFront, onlyFront, onlyBack, width);
-  }
+  for (let i = 1; i <= lats; i++) paths.push(circle3(r, SEG, 'lat', -Math.PI / 2 + i * Math.PI / (lats + 1)));
+  for (let i = 0; i < lons; i++) paths.push(circle3(r, SEG, 'lon', i * Math.PI / lons));
+  for (const rr of rings) paths.push(circle3(r * rr, SEG + 8, 'lat', 0));
+  const rot = paths.map((p) => p.map((q) => rot3(q, ax, ay)));
+  wireStroke(ctx, rot, cx, cy, r * 4.5, col, aBack, aFront, width, onlyFront, onlyBack);
 }
 
 /* Icosaèdre : sommets + arêtes (astéroïdes) */
@@ -634,12 +675,12 @@ const ICO_E = (() => {
 let asteroids = [];
 function initAsteroids() {
   asteroids = [];
-  if (state.reduced) return;
-  const n = innerWidth < 900 ? 3 : 5;
+  if (state.reduced || Q.low) return;
+  const n = innerWidth < 900 ? 2 : 3;
   for (let i = 0; i < n; i++) {
     asteroids.push({
       x: Math.random() * innerWidth, y: Math.random() * innerHeight,
-      r: (14 + Math.random() * 26) * wireScale(),
+      r: (16 + Math.random() * 24) * wireScale(),
       vx: (Math.random() - 0.5) * 12, vy: (Math.random() - 0.5) * 8,
       ax: Math.random() * TAU, ay: Math.random() * TAU,
       sx: (Math.random() - 0.5) * 0.6, sy: (Math.random() - 0.5) * 0.8,
@@ -649,78 +690,84 @@ function initAsteroids() {
 }
 
 function drawAsteroids(now, dt) {
+  const lw = wireScale();
   for (const a of asteroids) {
     a.x += a.vx * dt; a.y += a.vy * dt;
     if (a.x < -60) a.x = innerWidth + 60; if (a.x > innerWidth + 60) a.x = -60;
     if (a.y < -60) a.y = innerHeight + 60; if (a.y > innerHeight + 60) a.y = -60;
     const ax = a.ax + now / 1000 * a.sx, ay = a.ay + now / 1000 * a.sy;
-    const pts = ICO_V.map((p) => rot3([p[0] * a.r, p[1] * a.r, p[2] * a.r], ax, ay, 0));
     const f = a.r * 5;
-    bgCtx.lineWidth = wireScale();
+    const pts = ICO_V.map((p) => rot3([p[0] * a.r, p[1] * a.r, p[2] * a.r], ax, ay));
+    // Toutes les arêtes en un seul chemin, un seul stroke
+    bgCtx.strokeStyle = 'rgba(' + a.col + ',0.34)';
+    bgCtx.lineWidth = lw;
+    bgCtx.beginPath();
     for (const [i, j] of ICO_E) {
-      const p = project(pts[i], a.x, a.y, f, a.r), q = project(pts[j], a.x, a.y, f, a.r);
-      const d = (p[2] + q[2]) / 2;
-      bgCtx.strokeStyle = 'rgba(' + a.col + ',' + (0.18 + 0.32 * (d + 1) / 2).toFixed(3) + ')';
-      bgCtx.beginPath(); bgCtx.moveTo(p[0], p[1]); bgCtx.lineTo(q[0], q[1]); bgCtx.stroke();
+      const p = pts[i], q = pts[j];
+      const sp = f / (f - p[2]), sq = f / (f - q[2]);
+      bgCtx.moveTo(a.x + p[0] * sp, a.y + p[1] * sp);
+      bgCtx.lineTo(a.x + q[0] * sq, a.y + q[1] * sq);
     }
-    // Sommets lumineux
-    bgCtx.fillStyle = 'rgba(' + a.col + ',0.9)';
-    for (const p of pts) { if (p[2] > 0) { const s = project(p, a.x, a.y, f, a.r); bgCtx.fillRect(s[0] - 1, s[1] - 1, 2, 2); } }
+    bgCtx.stroke();
   }
 }
 
-/** Sol en grille perspective (synthwave) qui défile ; accélère avec la roue. */
+/** Sol en grille perspective. Deux strokes + un fondu : plus de dégradé par colonne. */
 let gridPhase = 0;
-function drawGrid(now, dt) {
-  const W = innerWidth, H = innerHeight;
-  const hy = H * 0.58;                                  // horizon
+function drawGrid() {
+  if (Q.low) return;
+  const W = innerWidth, H = innerHeight, hy = bgCache.hy || H * 0.58;
   const speed = 0.35 + clamp(Math.abs(state.vel) / 30, 0, 1) * 3;
-  gridPhase = (gridPhase + dt * speed) % 1;
+  gridPhase = (gridPhase + 0.016 * speed) % 1;
   bgCtx.save();
   bgCtx.beginPath(); bgCtx.rect(0, hy, W, H - hy); bgCtx.clip();
-  bgCtx.lineWidth = wireScale();
-  // Lignes horizontales : profondeur t (0 = horizon, 1 = bord bas), espacement en t^3
-  const rows = 14;
-  for (let i = 0; i < rows; i++) {
-    const t = Math.pow((i + gridPhase) / rows, 3);
-    const y = hy + (H - hy) * t;
-    bgCtx.strokeStyle = 'rgba(76,240,255,' + (0.05 + 0.3 * t).toFixed(3) + ')';
-    bgCtx.beginPath(); bgCtx.moveTo(0, y); bgCtx.lineTo(W, y); bgCtx.stroke();
+  bgCtx.lineWidth = 1;
+
+  // Lignes horizontales : espacement en t^3 pour l'effet de fuite
+  bgCtx.strokeStyle = 'rgba(76,240,255,0.3)';
+  bgCtx.beginPath();
+  for (let i = 0; i < 14; i++) {
+    const y = hy + (H - hy) * Math.pow((i + gridPhase) / 14, 3);
+    bgCtx.moveTo(0, y); bgCtx.lineTo(W, y);
   }
+  bgCtx.stroke();
+
   // Lignes verticales convergeant vers le point de fuite
-  const cols = 18;
   const vx = W / 2 + (parseFloat(document.documentElement.style.getPropertyValue('--px')) || 0) * -W * 0.05;
-  for (let i = -cols; i <= cols; i++) {
-    const xb = W / 2 + i * (W * 1.6 / cols);
-    const g = bgCtx.createLinearGradient(vx, hy, xb, H);
-    g.addColorStop(0, 'rgba(255,77,224,0)');
-    g.addColorStop(1, 'rgba(255,77,224,0.28)');
-    bgCtx.strokeStyle = g;
-    bgCtx.beginPath(); bgCtx.moveTo(vx, hy); bgCtx.lineTo(xb, H); bgCtx.stroke();
+  bgCtx.strokeStyle = 'rgba(255,77,224,0.26)';
+  bgCtx.beginPath();
+  for (let i = -14; i <= 14; i++) {
+    bgCtx.moveTo(vx, hy);
+    bgCtx.lineTo(W / 2 + i * (W * 1.6 / 14), H);
   }
-  // Lueur d'horizon
-  const hg = bgCtx.createLinearGradient(0, hy, 0, hy + H * 0.25);
-  hg.addColorStop(0, 'rgba(76,240,255,0.16)'); hg.addColorStop(1, 'rgba(76,240,255,0)');
-  bgCtx.fillStyle = hg; bgCtx.fillRect(0, hy, W, H * 0.25);
+  bgCtx.stroke();
+
+  // Fondu vers l'horizon : on efface au lieu de dégrader chaque ligne
+  if (bgCache.fade) {
+    bgCtx.globalCompositeOperation = 'destination-out';
+    bgCtx.fillStyle = bgCache.fade;
+    bgCtx.fillRect(0, hy, W, H - hy);
+    bgCtx.globalCompositeOperation = 'source-over';
+  }
+  if (bgCache.glow) {
+    bgCtx.fillStyle = bgCache.glow;
+    bgCtx.fillRect(0, hy, W, H * 0.25);
+  }
   bgCtx.restore();
 }
 
-/** Cage holographique autour de la roue : sphère fil de fer en rotation.
-    Moitié arrière sur le fond, moitié avant (discrète) sur le canvas d'effets. */
+/** Cage holographique autour de la roue (moitié arrière sur le fond, avant sur les FX). */
 function drawCage(ctx, now, front) {
-  if (!cssSize || !state.segments.length) return;
+  if (!cssSize || !state.segments.length || Q.low) return;
   const wc = wheelCenter();
-  const r = wc.R * 1.24;
-  const ay = now / 9000 * TAU + state.rot * 0.2;
-  const ax = 0.35 + Math.sin(now / 6000) * 0.15;
-  wireSphere(ctx, wc.x, wc.y, r, ax, ay, {
-    col: '120,220,255', lats: 4, lons: 8, width: wireScale(),
-    aBack: 0.28, aFront: 0.13,
+  wireSphere(ctx, wc.x, wc.y, wc.R * 1.24, 0.35 + Math.sin(now / 6000) * 0.15, now / 9000 * TAU + state.rot * 0.2, {
+    col: '120,220,255', lats: 3, lons: 6, width: wireScale(),
+    aBack: 0.26, aFront: 0.12,
     onlyFront: front, onlyBack: !front,
   });
 }
 
-/** Réticule de visée : couronne graduée, arcs tournants, crochets. Rouge au verrouillage. */
+/** Réticule de visée : couronne graduée, arcs tournants, crochets. */
 function drawReticle(now) {
   if (!cssSize || !state.segments.length) return;
   const wc = wheelCenter();
@@ -728,86 +775,90 @@ function drawReticle(now) {
   const col = lock > 0.3 ? '255,77,224' : '76,240,255';
   const ws = wireScale();
   const ctx = bgCtx;
+
   ctx.save();
   ctx.translate(wc.x, wc.y);
-  // Couronne graduée (tourne à l'envers de la roue, lentement)
-  const r1 = wc.R * 1.33;
   ctx.rotate(-state.rot * 0.5 - now / 30000 * TAU);
   ctx.lineWidth = ws;
-  for (let i = 0; i < 72; i++) {
-    const a = i / 72 * TAU;
-    const len = i % 18 === 0 ? 14 : i % 6 === 0 ? 8 : 4;
-    ctx.strokeStyle = 'rgba(' + col + ',' + (i % 6 === 0 ? 0.55 : 0.28) + ')';
+  // Graduations : deux chemins (majeures / mineures) au lieu d'un stroke par trait
+  const r1 = wc.R * 1.33;
+  for (const major of [false, true]) {
+    ctx.strokeStyle = 'rgba(' + col + ',' + (major ? 0.55 : 0.26) + ')';
     ctx.beginPath();
-    ctx.moveTo(Math.cos(a) * r1, Math.sin(a) * r1);
-    ctx.lineTo(Math.cos(a) * (r1 + len * ws), Math.sin(a) * (r1 + len * ws));
+    for (let i = 0; i < 36; i++) {
+      if ((i % 3 === 0) !== major) continue;
+      const a = i / 36 * TAU, len = (i % 9 === 0 ? 13 : major ? 8 : 4) * ws;
+      const ca = Math.cos(a), sa = Math.sin(a);
+      ctx.moveTo(ca * r1, sa * r1);
+      ctx.lineTo(ca * (r1 + len), sa * (r1 + len));
+    }
     ctx.stroke();
   }
   ctx.restore();
-  // Arcs qui tournent à des vitesses différentes
+
   ctx.save();
   ctx.translate(wc.x, wc.y);
-  const arcsDef = [[1.38, 1 / 7000, 2.1, 0.45], [1.42, -1 / 11000, 1.1, 0.35], [1.29, 1 / 4000, 0.5, 0.6]];
-  for (const [rr, sp, span, a] of arcsDef) {
+  ctx.strokeStyle = 'rgba(' + col + ',0.45)';
+  ctx.lineWidth = (1.5 + lock * 1.5) * ws;
+  ctx.beginPath();
+  for (const [rr, sp, span] of [[1.38, 1 / 7000, 2.1], [1.42, -1 / 11000, 1.1], [1.29, 1 / 4000, 0.5]]) {
     const a0 = now * sp * TAU + state.rot * 0.2;
-    ctx.strokeStyle = 'rgba(' + col + ',' + a + ')';
-    ctx.lineWidth = (1.5 + lock * 1.5) * ws;
-    ctx.beginPath(); ctx.arc(0, 0, wc.R * rr, a0, a0 + span); ctx.stroke();
+    ctx.arc(0, 0, wc.R * rr, a0, a0 + span);
+    ctx.moveTo(0, 0);                                // coupe le trait entre deux arcs
   }
-  // Crochets d'angle (pulsent, se resserrent au verrouillage)
-  const d = wc.R * (1.55 - 0.08 * lock) * (1 + 0.01 * Math.sin(now / 300));
+  ctx.stroke();
+
+  // Crochets d'angle (se resserrent au verrouillage)
+  const d = wc.R * (1.55 - 0.08 * lock);
   const L = 18 * ws;
   ctx.strokeStyle = 'rgba(' + col + ',' + (0.5 + 0.4 * lock) + ')';
   ctx.lineWidth = 2 * ws;
+  ctx.beginPath();
   for (const [sx, sy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
-    ctx.beginPath();
     ctx.moveTo(sx * d, sy * d - sy * L); ctx.lineTo(sx * d, sy * d); ctx.lineTo(sx * d - sx * L, sy * d);
-    ctx.stroke();
   }
+  ctx.stroke();
   ctx.restore();
 }
 
-/** Tunnel hyperespace fil de fer : anneaux 3D qui foncent vers la caméra au départ du spin. */
+/** Tunnel hyperespace : anneaux qui foncent vers la caméra au départ du spin. */
 let tunnel = { t0: -1e9, rings: [] };
 function tunnelStart(now) {
   tunnel.t0 = now;
-  tunnel.rings = Array.from({ length: 14 }, (_, i) => ({ z: i / 14 }));
+  tunnel.rings = Array.from({ length: 10 }, (_, i) => ({ z: i / 10 }));
 }
 function drawTunnel(now, dt) {
   const age = (now - tunnel.t0) / 1000;
-  if (age < 0 || age > 2.2 || state.reduced) return;
-  const I = age < 0.3 ? age / 0.3 : age > 1.5 ? 1 - (age - 1.5) / 0.7 : 1;   // fondu entrée / sortie
+  if (age < 0 || age > 2.2 || state.reduced || Q.low) return;
+  const I = age < 0.3 ? age / 0.3 : age > 1.5 ? 1 - (age - 1.5) / 0.7 : 1;
   const wc = wheelCenter();
-  const speed = 1.6;
   const spin = state.rot * 0.6;
+  const maxR = Math.max(innerWidth, innerHeight) * 1.6;
   fctx.save();
-  fctx.globalCompositeOperation = 'lighter';
   fctx.lineWidth = 1.5 * wireScale();
   for (const ring of tunnel.rings) {
-    ring.z += speed * dt;
+    ring.z += 1.6 * dt;
     if (ring.z > 1) ring.z -= 1;
-    const s = 1 / (1.05 - ring.z);                 // perspective : z→1 = tout près
-    const r = wc.R * 0.25 * s;
-    if (r > Math.max(innerWidth, innerHeight) * 1.6) continue;
-    const a = I * 0.55 * ring.z;
-    fctx.strokeStyle = (ring.z * 5 | 0) % 2 ? 'rgba(76,240,255,' + a + ')' : 'rgba(255,77,224,' + a + ')';
+    const r = wc.R * 0.25 / (1.05 - ring.z);
+    if (r > maxR) continue;
+    fctx.strokeStyle = ((ring.z * 5 | 0) % 2 ? 'rgba(255,77,224,' : 'rgba(76,240,255,') + (I * 0.55 * ring.z) + ')';
     fctx.beginPath();
-    for (let k = 0; k <= 12; k++) {                // dodécagone = anneau "fil de fer"
-      const ang = k / 12 * TAU + spin;
+    for (let k = 0; k <= 10; k++) {
+      const ang = k / 10 * TAU + spin;
       const x = wc.x + Math.cos(ang) * r, y = wc.y + Math.sin(ang) * r;
       k ? fctx.lineTo(x, y) : fctx.moveTo(x, y);
     }
     fctx.stroke();
   }
-  // Longerons qui relient les anneaux
-  fctx.strokeStyle = 'rgba(160,230,255,' + (I * 0.18) + ')';
-  for (let k = 0; k < 12; k++) {
-    const ang = k / 12 * TAU + spin;
-    fctx.beginPath();
+  // Longerons : un seul chemin
+  fctx.strokeStyle = 'rgba(160,230,255,' + (I * 0.16) + ')';
+  fctx.beginPath();
+  for (let k = 0; k < 8; k++) {
+    const ang = k / 8 * TAU + spin;
     fctx.moveTo(wc.x + Math.cos(ang) * wc.R * 0.25, wc.y + Math.sin(ang) * wc.R * 0.25);
-    fctx.lineTo(wc.x + Math.cos(ang) * innerWidth * 2, wc.y + Math.sin(ang) * innerWidth * 2);
-    fctx.stroke();
+    fctx.lineTo(wc.x + Math.cos(ang) * maxR, wc.y + Math.sin(ang) * maxR);
   }
+  fctx.stroke();
   fctx.restore();
 }
 
@@ -822,13 +873,28 @@ let cacheDirty = true;
 
 // Ressort du pointeur (claquement élastique)
 let pk = 0, pv = 0;
+let raysNext = 0;
+let wheelGfx = null;   // dégradés de la roue, reconstruits au redimensionnement seulement
+
+/** (Re)construit les dégradés statiques de la roue. Les coordonnées d'un dégradé
+ *  sont interprétées au moment du tracé : on peut donc les créer une fois. */
+function ensureWheelGfx(c) {
+  if (wheelGfx) return;
+  const ring = c.createLinearGradient(0, -R, 0, R);
+  ring.addColorStop(0, '#d6e8ff'); ring.addColorStop(0.4, '#5f6f9a');
+  ring.addColorStop(0.6, '#b3c6ea'); ring.addColorStop(1, '#3f4a70');
+  const dome = c.createLinearGradient(0, -Rw, 0, Rw * 0.1);
+  dome.addColorStop(0, 'rgba(255,255,255,0.2)');
+  dome.addColorStop(1, 'rgba(255,255,255,0)');
+  wheelGfx = { ring, dome };
+}
 
 function layoutWheel() {
   // clientWidth/Height : boîte de layout, insensible aux transformations CSS (tilt, boot)
   const s = Math.floor(Math.min(els.wheelWrap.clientWidth, els.wheelWrap.clientHeight));
   if (s < 40) return;
   cssSize = s;
-  const dpr = Math.min(devicePixelRatio || 1, 3);
+  const dpr = Math.min(devicePixelRatio || 1, Q.low ? 1 : 2);
   els.wheel.style.width = s + 'px';
   els.wheel.style.height = s + 'px';
   els.wheel.width = Math.round(s * dpr);
@@ -836,6 +902,10 @@ function layoutWheel() {
   wctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   R = s / 2 * 0.86;      // marge pour le pointeur et la lueur de l'anneau
   Rw = R * 0.94;
+  // Taille posée une fois : ensuite on n'anime que transform/opacity (composités)
+  els.halo.style.width = els.halo.style.height = Math.round(R * 2.9) + 'px';
+  els.rays.style.width = els.rays.style.height = Math.round(R * 2.7) + 'px';
+  wheelGfx = null;
   cacheDirty = true;
 }
 
@@ -847,7 +917,7 @@ function layoutWheel() {
 function rebuildWheelCache() {
   cacheDirty = false;
   computeArcs();
-  const dpr = Math.min(devicePixelRatio || 1, 3);
+  const dpr = Math.min(devicePixelRatio || 1, Q.low ? 1 : 2);
   wheelCache = document.createElement('canvas');
   wheelCache.width = wheelCache.height = Math.round(cssSize * dpr);
   const c = wheelCache.getContext('2d');
@@ -957,6 +1027,7 @@ function drawWheel(now) {
   }
 
   // Flottement + respiration au repos (désactivés en reduced motion)
+  ensureWheelGfx(c);
   const floatY = state.reduced ? 0 : Math.sin(now / 1400) * cssSize * 0.006;
   const breath = state.reduced ? 1 : 1 + Math.sin(now / 2100) * 0.006;
   const zoom = 1 + 0.05 * state.suspense + (state.winner !== null ? 0.02 : 0);
@@ -970,10 +1041,8 @@ function drawWheel(now) {
   if (haloI > 0.02 && !state.reduced) {
     const pulse = 0.6 + 0.4 * Math.sin(now / (110 - 60 * state.suspense));
     const col = state.winner !== null ? state.segments[state.winner].color : '#ffd75e';
-    const d = Math.round(R * 2.9 * breath * zoom);
-    els.halo.style.width = els.halo.style.height = d + 'px';
     els.halo.style.setProperty('--halo-color', col);
-    els.halo.style.transform = `translate(-50%, calc(-50% + ${floatY.toFixed(1)}px))`;
+    els.halo.style.transform = `translate(-50%,-50%) translateY(${floatY.toFixed(1)}px) scale(${(breath * zoom).toFixed(3)})`;
     els.halo.style.opacity = (0.55 * haloI * pulse).toFixed(3);
   } else if (els.halo.style.opacity !== '0') {
     els.halo.style.opacity = '0';
@@ -981,11 +1050,10 @@ function drawWheel(now) {
 
   // Rayons divins derrière la roue : tournent lentement, s'entraînent avec la roue,
   // s'intensifient avec la vitesse et le suspense
-  if (!state.reduced) {
+  if (!state.reduced && !Q.low && now > raysNext) {
+    raysNext = now + 50;                            // ~20 Hz suffit pour une rotation lente
     const speedF = clamp(Math.abs(state.vel) / 30, 0, 1);
-    const d = Math.round(R * 2.7 * breath * zoom);
-    els.rays.style.width = els.rays.style.height = d + 'px';
-    els.rays.style.transform = 'translate(-50%, calc(-50% + ' + floatY.toFixed(1) + 'px)) rotate(' + (now / 45000 * TAU + state.rot * 0.3).toFixed(3) + 'rad)';
+    els.rays.style.transform = 'translate(-50%,-50%) translateY(' + floatY.toFixed(1) + 'px) scale(' + (breath * zoom).toFixed(3) + ') rotate(' + (now / 45000 * TAU + state.rot * 0.3).toFixed(3) + 'rad)';
     els.rays.style.opacity = (0.4 + 0.5 * Math.max(speedF, state.suspense, state.winner !== null ? 0.6 : 0)).toFixed(2);
   }
 
@@ -1013,10 +1081,7 @@ function drawWheel(now) {
       const mx = Math.cos(a) * o.r, my = Math.sin(a) * o.r;
       c.beginPath(); c.arc(mx, my, o.moon, 0, TAU);
       c.fillStyle = '#fff';
-      c.shadowColor = 'rgb(' + o.col + ')';
-      c.shadowBlur = 14;
       c.fill();
-      c.shadowBlur = 0;
     }
   }
 
@@ -1029,9 +1094,8 @@ function drawWheel(now) {
   };
 
   // Traînée / motion blur à haute vitesse : fantômes décalés
-  if (!state.reduced && Math.abs(state.vel) > 7) {
-    drawCache(state.rot - state.vel * 0.014, 0.22);
-    drawCache(state.rot - state.vel * 0.028, 0.1);
+  if (!state.reduced && !Q.low && Math.abs(state.vel) > 7) {
+    drawCache(state.rot - state.vel * 0.02, 0.28);
   }
   drawCache(state.rot, 1);
 
@@ -1062,17 +1126,18 @@ function drawWheel(now) {
     const pulse = 0.5 + 0.5 * Math.sin(now / 180);
     c.beginPath();
     wedgePath(c, state.winner, Rw);
+    const { r: gr, g: gg, b: gb } = hexToRgb(seg.color);
+    c.strokeStyle = `rgba(${gr},${gg},${gb},${0.3 + 0.25 * pulse})`;
+    c.lineWidth = 14 + 8 * pulse;
+    c.stroke();
     c.strokeStyle = 'rgba(255,255,255,0.95)';
     c.lineWidth = 3 + 2 * pulse;
-    c.shadowColor = seg.color;
-    c.shadowBlur = 22 + 18 * pulse;
     c.stroke();
-    c.shadowBlur = 0;
   }
   c.restore(); // fin espace tourné
 
   // Reflet spéculaire qui glisse (suit lentement le temps et la rotation)
-  if (!state.reduced && c.createConicGradient) {
+  if (!state.reduced && !Q.low && c.createConicGradient) {
     const glossA = now / 4000 + state.rot * 0.35;
     const cg = c.createConicGradient(glossA, 0, 0);
     cg.addColorStop(0, 'rgba(255,255,255,0)');
@@ -1090,17 +1155,14 @@ function drawWheel(now) {
 
   // Dôme de verre : reflet fixe en haut du disque (espace non tourné)
   if (!state.reduced) {
-    const dome = c.createLinearGradient(0, -Rw, 0, Rw * 0.1);
-    dome.addColorStop(0, 'rgba(255,255,255,0.2)');
-    dome.addColorStop(1, 'rgba(255,255,255,0)');
     c.globalCompositeOperation = 'screen';
-    c.fillStyle = dome;
+    c.fillStyle = wheelGfx.dome;
     c.beginPath(); c.arc(0, 0, Rw, 0, TAU); c.fill();
     c.globalCompositeOperation = 'source-over';
   }
 
   // Anneau d'énergie plasma : n'apparaît qu'en vitesse, tourne avec la roue
-  const plasma = state.reduced ? 0 : clamp(Math.abs(state.vel) / 28, 0, 1);
+  const plasma = state.reduced || Q.low ? 0 : clamp(Math.abs(state.vel) / 28, 0, 1);
   if (plasma > 0.02 && c.createConicGradient) {
     const eg = c.createConicGradient(state.rot * 1.6, 0, 0);
     for (let k = 0; k < 6; k++) {
@@ -1114,30 +1176,25 @@ function drawWheel(now) {
     c.beginPath(); c.arc(0, 0, R * 1.01, 0, TAU);
     c.strokeStyle = eg;
     c.lineWidth = (R - Rw) * 1.9;
-    c.shadowColor = 'rgba(120,230,255,0.8)';
-    c.shadowBlur = R * 0.05;
     c.stroke();
     c.restore();
   }
 
   // Anneau métallique + néon dont la teinte tourne
   const ringR = (Rw + R) / 2;
-  const mg = c.createLinearGradient(0, -R, 0, R);
-  mg.addColorStop(0, '#d6e8ff'); mg.addColorStop(0.4, '#5f6f9a');
-  mg.addColorStop(0.6, '#b3c6ea'); mg.addColorStop(1, '#3f4a70');
   c.beginPath(); c.arc(0, 0, ringR, 0, TAU);
-  c.strokeStyle = mg;
+  c.strokeStyle = wheelGfx.ring;
   c.lineWidth = R - Rw;
   c.stroke();
   if (!state.reduced) {
-    const hue = 185 + 120 * (0.5 + 0.5 * Math.sin(now / 1800)); // oscille cyan <-> magenta
-    c.beginPath(); c.arc(0, 0, R, 0, TAU);
-    c.strokeStyle = `hsla(${hue},95%,62%,0.6)`;
-    c.lineWidth = 2.5;
-    c.shadowColor = `hsla(${hue},95%,62%,0.9)`;
-    c.shadowBlur = R * 0.07;
-    c.stroke();
-    c.shadowBlur = 0;
+    // Néon : trois passes concentriques — bien moins cher qu'un shadowBlur
+    const hue = (185 + 120 * (0.5 + 0.5 * Math.sin(now / 1800))).toFixed(0);
+    for (const [w, al] of (Q.low ? [[0.008, 0.7]] : [[0.05, 0.1], [0.024, 0.22], [0.008, 0.7]])) {
+      c.beginPath(); c.arc(0, 0, R, 0, TAU);
+      c.strokeStyle = `hsla(${hue},95%,62%,${al})`;
+      c.lineWidth = Math.max(1, R * w);
+      c.stroke();
+    }
   }
 
   // Moyeu central « SPIN » qui pulse pour appeler le clic
@@ -1147,11 +1204,14 @@ function drawWheel(now) {
   hubG.addColorStop(0, '#5a2d9a'); hubG.addColorStop(0.5, '#1c0f3d'); hubG.addColorStop(1, '#07091a');
   c.beginPath(); c.arc(0, 0, Rh, 0, TAU);
   c.fillStyle = hubG;
-  c.shadowColor = state.reduced ? 'rgba(0,0,0,0.6)' : 'rgba(76,240,255,' + (0.35 + 0.25 * Math.sin(now / 380)) + ')';
-  c.shadowBlur = Rh * 0.6;
   c.fill();
-  c.shadowBlur = 0;
-  if (!state.reduced && c.createConicGradient) {          // vortex d'accrétion
+  if (!state.reduced) {                              // lueur du moyeu : un anneau, pas un flou
+    c.beginPath(); c.arc(0, 0, Rh * 1.06, 0, TAU);
+    c.strokeStyle = 'rgba(76,240,255,' + (0.18 + 0.14 * Math.sin(now / 380)).toFixed(3) + ')';
+    c.lineWidth = Rh * 0.16;
+    c.stroke();
+  }
+  if (!state.reduced && !Q.low && c.createConicGradient) {   // vortex d'accrétion
     const vg = c.createConicGradient(now / 600 + state.rot * 2.2, 0, 0);
     vg.addColorStop(0, 'rgba(76,240,255,0)'); vg.addColorStop(0.12, 'rgba(76,240,255,0.6)');
     vg.addColorStop(0.3, 'rgba(0,0,0,0)'); vg.addColorStop(0.5, 'rgba(255,77,224,0.55)');
@@ -1181,10 +1241,7 @@ function drawWheel(now) {
   c.textAlign = 'center';
   c.textBaseline = 'middle';
   c.font = `800 ${Rh * 0.4}px system-ui, sans-serif`;
-  c.shadowColor = 'rgba(76,240,255,0.9)';
-  c.shadowBlur = 10;
   c.fillText('SPIN', 0, Rh * 0.03);
-  c.shadowBlur = 0;
 
   // Laser de visée : du pointeur au moyeu, s'intensifie avec le suspense
   if (state.suspense > 0.05 && !state.reduced) {
@@ -1193,7 +1250,6 @@ function drawWheel(now) {
     c.globalCompositeOperation = 'lighter';
     c.strokeStyle = 'rgba(255,77,224,' + la.toFixed(3) + ')';
     c.lineWidth = 2;
-    c.shadowColor = '#ff4de0'; c.shadowBlur = 12;
     c.beginPath(); c.moveTo(0, -R); c.lineTo(0, -Rh); c.stroke();
     c.restore();
   }
@@ -1211,19 +1267,13 @@ function drawWheel(now) {
   c.lineTo(0, ph * 0.75);
   c.closePath();
   c.fillStyle = pg;
-  c.shadowColor = 'rgba(0,0,0,0.55)';
-  c.shadowBlur = 8;
   c.fill();
-  c.shadowBlur = 0;
   c.strokeStyle = 'rgba(20,22,37,0.7)';
   c.lineWidth = 1.5;
   c.stroke();
   c.beginPath(); c.arc(0, -ph * 0.3, pw * 0.32, 0, TAU);
   c.fillStyle = '#4cf0ff';
-  c.shadowColor = '#4cf0ff';
-  c.shadowBlur = 8;
   c.fill();
-  c.shadowBlur = 0;
   c.restore();
 
   c.restore(); // fin translate/scale global
@@ -1239,10 +1289,11 @@ const rays = [];       // rayons lumineux depuis le gagnant
 
 const CONFETTI_COLORS = ['#ff4de0', '#4cf0ff', '#ffd75e', '#7b2cff', '#ffffff', '#3ddc97', '#ff9a3d'];
 
-function layoutFxCanvas(canvas) {
-  const dpr = Math.min(devicePixelRatio || 1, 2);
+function layoutFxCanvas(canvas, maxDpr) {
+  const dpr = Math.min(devicePixelRatio || 1, maxDpr);
   canvas.width = Math.round(innerWidth * dpr);
   canvas.height = Math.round(innerHeight * dpr);
+  canvas._dpr = dpr;
 }
 
 /** Centre de la roue en coordonnées de page (pour viser les effets). */
@@ -1310,12 +1361,19 @@ function spawnRays(color, angle) {
   rays.push({ x: wc.x, y: wc.y, base: angle, color, t0: performance.now(), len: Math.max(innerWidth, innerHeight) });
 }
 
+let fxPainted = false;
 function drawFx(now, dt) {
   const hasWork = confetti.length || sparks.length || waves.length || rays.length;
-  const dpr = Math.min(devicePixelRatio || 1, 2);
+  const extras = !state.reduced && !Q.low;
+  if (!hasWork && !extras) {                       // rien à dessiner : on n'efface qu'une fois
+    if (fxPainted) { fctx.setTransform(1, 0, 0, 1, 0, 0); fctx.clearRect(0, 0, els.fx.width, els.fx.height); fxPainted = false; }
+    return;
+  }
+  fxPainted = true;
+  const dpr = els.fx._dpr || 1;
   fctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   fctx.clearRect(0, 0, innerWidth, innerHeight);
-  if (!state.reduced) { drawCage(fctx, now, true); drawTunnel(now, dt); }
+  if (extras) { drawCage(fctx, now, true); drawTunnel(now, dt); }
   if (!hasWork) return;
 
   // Rayons lumineux (additifs) qui partent du segment gagnant
@@ -1900,8 +1958,8 @@ function bindGlobal() {
   // Redimensionnements
   new ResizeObserver(() => layoutWheel()).observe(els.wheelWrap);
   addEventListener('resize', () => {
-    layoutFxCanvas(els.fx);
-    layoutFxCanvas(els.bg);
+    layoutFxCanvas(els.fx, 1.5);
+    layoutFxCanvas(els.bg, 1);
     initMotes();
     buildPlanet();
   });
@@ -1935,11 +1993,17 @@ function setPresentation(on, skipExitFs = false) {
 
 /* Boucle principale : une seule rAF pour tout (fond, roue, effets) */
 let lastFrame = performance.now();
+let skipFrame = false;
+let dtBg = 0;
 function frame(now) {
   const dt = clamp((now - lastFrame) / 1000, 0, 0.05);
   lastFrame = now;
-  updateSpin(now, dt);
-  drawBg(now, dt);
+  monitorPerf(now);
+  updateSpin(now, dt);              // physique, ticks et sons : toujours à pleine cadence
+  // En mode allégé, seul le décor passe à 30 fps : la roue, elle, reste fluide
+  dtBg += dt;
+  skipFrame = Q.low && !skipFrame;
+  if (!skipFrame) { drawBg(now, dtBg); dtBg = 0; }
   drawWheel(now);
   drawFx(now, dt);
   requestAnimationFrame(frame);
@@ -1960,8 +2024,8 @@ function init() {
   if (innerWidth >= 900) document.body.classList.add('editor-open');
   els.btnEditor.setAttribute('aria-expanded', String(document.body.classList.contains('editor-open')));
 
-  layoutFxCanvas(els.fx);
-  layoutFxCanvas(els.bg);
+  layoutFxCanvas(els.fx, 1.5);
+  layoutFxCanvas(els.bg, 1);
   initMotes();
   buildPlanet();
   layoutWheel();
