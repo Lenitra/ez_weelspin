@@ -63,7 +63,7 @@ function setLowQuality() {
   Q.low = true;
   document.body.classList.add('low-fx');
   layoutWheel();                       // redessine la roue à la résolution réduite
-  asteroids = [];
+  satellites = [];
   initMotes();
   toast('Effets allégés pour rester fluide.');
 }
@@ -451,50 +451,108 @@ function sndUi(kind) {
 
 /* ============================ 5. Fond animé : champ d'étoiles ============ */
 
-const bgCtx = els.bg.getContext('2d', { alpha: true });
+const bgCtx = els.bg.getContext('2d');
 let starGroups = [];     // étoiles regroupées par couleur : un seul fillStyle par groupe
-let shooting = [];       // étoiles filantes
+let shooting = [];       // météores
 let nextShooting = 0;
-let planet = null;       // { r, cx, cy }
-let bgCache = {};        // dégradés recalculés seulement au redimensionnement
+let limb = null;         // planète observée depuis l'orbite : { cx, cy, R, lights[] }
+let bgCache = {};        // dégradés reconstruits seulement au redimensionnement
 
 /** Facteur d'échelle des traits fil de fer selon la taille d'écran. */
 const wireScale = () => clamp(Math.min(innerWidth, innerHeight) / 800, 1, 2.2);
 
-/** Dégradés du décor, coûteux à créer : construits une fois par taille d'écran. */
-function rebuildBgCache() {
-  const H = innerHeight, hy = H * 0.58;
-  const fade = bgCtx.createLinearGradient(0, hy, 0, H);
-  fade.addColorStop(0, 'rgba(0,0,0,0.92)');
-  fade.addColorStop(0.35, 'rgba(0,0,0,0.45)');
-  fade.addColorStop(1, 'rgba(0,0,0,0)');
-  const glow = bgCtx.createLinearGradient(0, hy, 0, hy + H * 0.25);
-  glow.addColorStop(0, 'rgba(76,240,255,0.16)');
-  glow.addColorStop(1, 'rgba(76,240,255,0)');
-  bgCache = { hy, fade, glow };
-}
-
+/**
+ * Géométrie du limbe planétaire : un très grand cercle dont le sommet affleure
+ * au deux tiers de l'écran — c'est ce qui donne la courbure vue depuis l'orbite.
+ */
 function buildPlanet() {
-  const r = Math.max(70, Math.min(innerWidth, innerHeight) * 0.17);
-  planet = { r, cx: innerWidth * 0.06 + r * 0.3, cy: innerHeight * 0.1 };
-  initAsteroids();
-  rebuildBgCache();
+  const W = innerWidth, H = innerHeight;
+  // Rayon basé sur la plus grande dimension : la courbure reste lisible en 16:9 comme en portrait
+  const R = Math.max(W, H * 1.5) * 1.15;
+  const cy = H * (W / H > 1.4 ? 0.78 : 0.7) + R;
+  const lights = [];
+  for (let i = 0; i < 60; i++) {
+    const a = -Math.PI / 2 + (Math.random() - 0.5) * 1.5;   // le long de l'arc visible
+    lights.push({ a, r: R * (0.988 + Math.random() * 0.011), ph: Math.random() * TAU });
+  }
+  limb = { cx: W * 0.5, cy, R, lights };
+
+  const g = bgCtx.createLinearGradient(0, cy - R, 0, H);
+  g.addColorStop(0, '#1e5a86');            // bord éclairé
+  g.addColorStop(0.1, '#123f63');
+  g.addColorStop(0.45, '#08243c');
+  g.addColorStop(1, '#03101f');            // profondeur de la face nuit
+  const term = bgCtx.createLinearGradient(0, 0, W, 0);
+  term.addColorStop(0, 'rgba(2,6,14,0)');
+  term.addColorStop(0.55, 'rgba(2,6,14,0.35)');
+  term.addColorStop(1, 'rgba(2,6,14,0.85)');
+  bgCache = { surface: g, terminator: term, top: cy - R };
+
+  initSatellites();
 }
 
-function drawPlanet(now) {
-  if (!planet || Q.low) return;
-  const { r, cx, cy } = planet;
-  wireSphere(bgCtx, cx, cy, r, 0.42, now / 14000 * TAU, {
-    col: '170,140,255', lats: 4, lons: 8, rings: [1.45, 1.75],
-    aBack: 0.1, aFront: 0.5, width: 1.2 * wireScale(),
-  });
-  // Petite lune en orbite (passe derrière puis devant)
-  const a = now / 9000 * TAU;
-  if (Math.sin(a) > 0) {
+/** Le limbe : atmosphère, grille orbitale, terminateur et lumières de villes. */
+function drawLimb(now) {
+  if (!limb) return;
+  const { cx, cy, R, lights } = limb;
+  const ws = wireScale();
+  const spin = now / 90000;                                // rotation très lente de la planète
+
+  // Corps de la planète
+  bgCtx.beginPath();
+  bgCtx.arc(cx, cy, R, 0, TAU);
+  bgCtx.fillStyle = bgCache.surface;
+  bgCtx.fill();
+
+  if (!Q.low) {
+    bgCtx.save();
     bgCtx.beginPath();
-    bgCtx.arc(cx + Math.cos(a) * r * 1.75, cy + Math.sin(a) * r * 0.5 + r * 0.15, r * 0.09, 0, TAU);
-    bgCtx.fillStyle = '#dfe8ff';
-    bgCtx.fill();
+    bgCtx.arc(cx, cy, R, 0, TAU);
+    bgCtx.clip();
+
+    // Grille orbitale : parallèles (un chemin) puis méridiens (un chemin)
+    bgCtx.strokeStyle = 'rgba(130, 210, 255, 0.2)';
+    bgCtx.lineWidth = ws;
+    bgCtx.beginPath();
+    for (let i = 1; i <= 6; i++) {
+      bgCtx.arc(cx, cy, R * (1 - i * 0.014), -Math.PI / 2 - 1, -Math.PI / 2 + 1);
+      bgCtx.moveTo(cx, cy);                                // coupe entre deux arcs
+    }
+    bgCtx.stroke();
+
+    bgCtx.strokeStyle = 'rgba(130, 210, 255, 0.15)';
+    bgCtx.beginPath();
+    for (let i = -12; i <= 12; i++) {
+      const a = -Math.PI / 2 + (i / 12) * 1.05 + spin;
+      const ca = Math.cos(a), sa = Math.sin(a);
+      bgCtx.moveTo(cx + ca * R * 0.9, cy + sa * R * 0.9);
+      bgCtx.lineTo(cx + ca * R, cy + sa * R);
+    }
+    bgCtx.stroke();
+
+    // Lumières de villes sur la face nuit
+    bgCtx.fillStyle = '#ffc46b';
+    for (const l of lights) {
+      const a = l.a + spin;
+      if (a < -Math.PI / 2) continue;                      // côté jour : rien à voir
+      bgCtx.globalAlpha = 0.25 + 0.35 * (0.5 + 0.5 * Math.sin(now / 900 + l.ph));
+      bgCtx.fillRect(cx + Math.cos(a) * l.r, cy + Math.sin(a) * l.r, 1.6 * ws, 1.6 * ws);
+    }
+    bgCtx.globalAlpha = 1;
+
+    // Terminateur jour / nuit
+    bgCtx.fillStyle = bgCache.terminator;
+    bgCtx.fillRect(0, bgCache.top, innerWidth, innerHeight - bgCache.top);
+    bgCtx.restore();
+  }
+
+  // Atmosphère : trois arcs concentriques, bien moins cher qu'un flou
+  for (const [k, al, w] of [[1.016, 0.1, 0.016], [1.008, 0.22, 0.008], [1.002, 0.45, 0.004], [1.0, 0.85, 0.0016]]) {
+    bgCtx.beginPath();
+    bgCtx.arc(cx, cy, R * k, -Math.PI / 2 - 1.2, -Math.PI / 2 + 1.2);
+    bgCtx.strokeStyle = `rgba(150, 225, 255, ${al})`;
+    bgCtx.lineWidth = Math.max(1, R * w);
+    bgCtx.stroke();
   }
 }
 
@@ -506,14 +564,15 @@ function initMotes() {
   const n = Math.min(Q.low ? 90 : 190, Math.round(innerWidth * innerHeight / div));
   const groups = new Map();
   for (let i = 0; i < n; i++) {
-    const z = 0.25 + Math.random() * 0.75;          // profondeur : petit/lent -> gros/rapide
-    const hue = Math.random() < 0.15 ? 300 : Math.random() < 0.5 ? 195 : 45;
-    const sat = Math.random() < 0.6 ? 0 : 70;
+    const z = 0.25 + Math.random() * 0.75;
+    // Étoiles réalistes : blanches, bleutées, ou légèrement ambrées
+    const hue = Math.random() < 0.2 ? 30 : 205;
+    const sat = Math.random() < 0.65 ? 0 : 55;
     const key = hue + '/' + sat;
-    if (!groups.has(key)) groups.set(key, { css: `hsl(${hue},${sat}%,92%)`, list: [] });
+    if (!groups.has(key)) groups.set(key, { css: `hsl(${hue},${sat}%,94%)`, list: [] });
     groups.get(key).list.push({
       x: Math.random() * innerWidth, y: Math.random() * innerHeight, z,
-      r: 0.8 + z * 1.8,
+      r: 0.8 + z * 1.6,
       ph: Math.random() * TAU, tw: 0.6 + Math.random() * 2.2,
     });
   }
@@ -523,8 +582,8 @@ function initMotes() {
 function spawnShooting() {
   const fromLeft = Math.random() < 0.5;
   shooting.push({
-    x: fromLeft ? -40 : innerWidth + 40, y: Math.random() * innerHeight * 0.5,
-    vx: (fromLeft ? 1 : -1) * (700 + Math.random() * 500), vy: 250 + Math.random() * 250,
+    x: fromLeft ? -40 : innerWidth + 40, y: Math.random() * innerHeight * 0.45,
+    vx: (fromLeft ? 1 : -1) * (700 + Math.random() * 500), vy: 220 + Math.random() * 240,
     life: 0, ttl: 1.1 + Math.random() * 0.5,
   });
 }
@@ -535,9 +594,7 @@ function drawBg(now, dt) {
   bgCtx.clearRect(0, 0, innerWidth, innerHeight);
   if (state.reduced) return;
 
-  drawGrid();
-
-  // Warp : les étoiles s'étirent depuis le centre de la roue selon sa vitesse
+  // Traînées d'étoiles quand la roue tourne vite (dérive de la station)
   const warp = clamp(Math.abs(state.vel) / 30, 0, 1);
   const wc = warp > 0.05 ? wheelCenter() : null;
   const t = now / 1000;
@@ -545,10 +602,9 @@ function drawBg(now, dt) {
   for (const g of starGroups) {
     bgCtx.fillStyle = bgCtx.strokeStyle = g.css;
     if (wc) {
-      // Traînées : un seul chemin et un seul stroke pour tout le groupe
-      const len = warp * warp * 0.3;
-      bgCtx.globalAlpha = clamp(0.35 + warp * 0.4, 0, 1);
-      bgCtx.lineWidth = 1.3;
+      const len = warp * warp * 0.22;
+      bgCtx.globalAlpha = clamp(0.3 + warp * 0.35, 0, 1);
+      bgCtx.lineWidth = 1.2;
       bgCtx.beginPath();
       for (const s of g.list) {
         s.y += s.z * 3 * dt;
@@ -562,40 +618,39 @@ function drawBg(now, dt) {
         s.y += s.z * 3 * dt;
         if (s.y > innerHeight + 4) { s.y = -4; s.x = Math.random() * innerWidth; }
         bgCtx.globalAlpha = clamp((0.3 + 0.6 * s.z) * (0.55 + 0.45 * Math.sin(t * s.tw + s.ph)), 0, 1);
-        bgCtx.fillRect(s.x, s.y, s.r, s.r);      // carré : bien moins cher qu'un arc
+        bgCtx.fillRect(s.x, s.y, s.r, s.r);
       }
     }
   }
   bgCtx.globalAlpha = 1;
 
-  drawPlanet(now);
-  drawAsteroids(now, dt);
+  drawLimb(now);
+  drawSatellites(now, dt);
   if (!Q.low) drawCage(bgCtx, now, false);
   drawReticle(now);
 
-  // Étoiles filantes, de temps en temps
-  if (now > nextShooting) { spawnShooting(); nextShooting = now + 3500 + Math.random() * 6000; }
+  // Météores
+  if (now > nextShooting) { spawnShooting(); nextShooting = now + 4000 + Math.random() * 7000; }
   for (let i = shooting.length - 1; i >= 0; i--) {
     const m = shooting[i];
     m.life += dt;
     if (m.life > m.ttl) { shooting.splice(i, 1); continue; }
     m.x += m.vx * dt; m.y += m.vy * dt;
-    const tail = 0.12;
     bgCtx.globalAlpha = Math.sin(Math.PI * m.life / m.ttl);
-    bgCtx.strokeStyle = '#cfefff';
+    bgCtx.strokeStyle = '#d8ecff';
     bgCtx.lineWidth = 2;
     bgCtx.beginPath();
     bgCtx.moveTo(m.x, m.y);
-    bgCtx.lineTo(m.x - m.vx * tail, m.y - m.vy * tail);
+    bgCtx.lineTo(m.x - m.vx * 0.12, m.y - m.vy * 0.12);
     bgCtx.stroke();
   }
   bgCtx.globalAlpha = 1;
 }
 
-/* ============================ 5b. Wireframe 3D ========================== */
-/* Moteur fil de fer minimal : rotation 3D, projection perspective, et tracé
-   groupé (un seul stroke pour l'avant, un seul pour l'arrière) — c'est ce
-   groupage qui rend l'ensemble tenable sans GPU. */
+/* ============================ 5b. Fil de fer 3D ========================== */
+/* Moteur minimal : rotation 3D, projection perspective, et surtout tracé groupé
+   (un seul stroke pour l'arrière, un pour l'avant) — c'est ce groupage qui rend
+   l'ensemble tenable en rendu logiciel. */
 
 function rot3(p, ax, ay) {
   let [x, y, z] = p;
@@ -606,10 +661,7 @@ function rot3(p, ax, ay) {
   return [x, y, z];
 }
 
-/**
- * Trace une liste de polylignes 3D en DEUX passes seulement (arrière puis avant),
- * au lieu d'un stroke par segment.
- */
+/** Trace des polylignes 3D en deux passes (arrière puis avant). */
 function wireStroke(ctx, paths, cx, cy, f, col, aBack, aFront, width, onlyFront, onlyBack) {
   for (const front of [false, true]) {
     if (front ? onlyBack : onlyFront) continue;
@@ -643,136 +695,118 @@ function circle3(r, n, kind, k) {
   return pts;
 }
 
-/** Sphère fil de fer (parallèles + méridiens), éventuellement avec anneaux. */
+/** Sphère fil de fer (coque orbitale autour de la roue). */
 function wireSphere(ctx, cx, cy, r, ax, ay, opts) {
-  const { col = '76,240,255', aBack = 0.12, aFront = 0.45, lats = 4, lons = 8,
-          rings = [], onlyFront = false, onlyBack = false, width = 1 } = opts;
-  const SEG = 20;                                   // 20 segments suffisent visuellement
+  const { col = '120,210,255', aBack = 0.12, aFront = 0.45, lats = 3, lons = 6,
+          onlyFront = false, onlyBack = false, width = 1 } = opts;
+  const SEG = 20;
   const paths = [];
   for (let i = 1; i <= lats; i++) paths.push(circle3(r, SEG, 'lat', -Math.PI / 2 + i * Math.PI / (lats + 1)));
   for (let i = 0; i < lons; i++) paths.push(circle3(r, SEG, 'lon', i * Math.PI / lons));
-  for (const rr of rings) paths.push(circle3(r * rr, SEG + 8, 'lat', 0));
   const rot = paths.map((p) => p.map((q) => rot3(q, ax, ay)));
   wireStroke(ctx, rot, cx, cy, r * 4.5, col, aBack, aFront, width, onlyFront, onlyBack);
 }
 
-/* Icosaèdre : sommets + arêtes (astéroïdes) */
-const ICO_V = (() => {
-  const t = (1 + Math.sqrt(5)) / 2, v = [];
-  for (const s of [-1, 1]) for (const u of [-1, 1]) { v.push([0, s, u * t]); v.push([s, u * t, 0]); v.push([u * t, 0, s]); }
-  const n = Math.hypot(1, t);
-  return v.map((p) => p.map((x) => x / n));
-})();
-const ICO_E = (() => {
-  const e = [];
-  for (let i = 0; i < 12; i++) for (let j = i + 1; j < 12; j++) {
-    const d = Math.hypot(ICO_V[i][0] - ICO_V[j][0], ICO_V[i][1] - ICO_V[j][1], ICO_V[i][2] - ICO_V[j][2]);
-    if (d < 1.1) e.push([i, j]);
+/* ---- Satellite fil de fer : corps, panneaux solaires, parabole ---- */
+const SAT = (() => {
+  const verts = [], index = new Map(), edges = [];
+  const key = (p) => p.map((v) => v.toFixed(3)).join(',');
+  const vi = (p) => { const k = key(p); if (!index.has(k)) { index.set(k, verts.length); verts.push(p); } return index.get(k); };
+  const add = (p, q) => edges.push([vi(p), vi(q)]);
+
+  // Corps : boîte
+  const bx = 0.30, by = 0.22, bz = 0.22;
+  const box = [];
+  for (const sx of [-1, 1]) for (const sy of [-1, 1]) for (const sz of [-1, 1]) box.push([sx * bx, sy * by, sz * bz]);
+  for (let i = 0; i < 8; i++) for (let k = i + 1; k < 8; k++) {
+    let diff = 0;
+    for (let m = 0; m < 3; m++) if (box[i][m] !== box[k][m]) diff++;
+    if (diff === 1) add(box[i], box[k]);
   }
-  return e;
+  // Panneaux solaires de part et d'autre
+  for (const s of [-1, 1]) {
+    const x0 = s * 0.36, x1 = s * 1.30, y = 0.34;
+    add([x0, -y, 0], [x1, -y, 0]); add([x1, -y, 0], [x1, y, 0]);
+    add([x1, y, 0], [x0, y, 0]); add([x0, y, 0], [x0, -y, 0]);
+    for (let k = 1; k < 4; k++) {
+      const xm = x0 + (x1 - x0) * (k / 4);
+      add([xm, -y, 0], [xm, y, 0]);
+    }
+    add([s * bx, 0, 0], [x0, 0, 0]);                      // bras de liaison
+  }
+  // Antenne parabolique
+  const n = 10;
+  for (let k = 0; k < n; k++) {
+    const a0 = k / n * TAU, a1 = (k + 1) / n * TAU;
+    add([Math.cos(a0) * 0.19, Math.sin(a0) * 0.19, -0.46], [Math.cos(a1) * 0.19, Math.sin(a1) * 0.19, -0.46]);
+  }
+  add([0, 0, -bz], [0, 0, -0.46]);
+  return { verts, edges };
 })();
 
-let asteroids = [];
-function initAsteroids() {
-  asteroids = [];
+let satellites = [];
+function initSatellites() {
+  satellites = [];
   if (state.reduced || Q.low) return;
   const n = innerWidth < 900 ? 2 : 3;
   for (let i = 0; i < n; i++) {
-    asteroids.push({
-      x: Math.random() * innerWidth, y: Math.random() * innerHeight,
-      r: (16 + Math.random() * 24) * wireScale(),
-      vx: (Math.random() - 0.5) * 12, vy: (Math.random() - 0.5) * 8,
+    satellites.push({
+      x: Math.random() * innerWidth, y: innerHeight * (0.08 + Math.random() * 0.5),
+      r: (34 + Math.random() * 26) * wireScale(),
+      vx: (Math.random() - 0.5) * 16, vy: (Math.random() - 0.5) * 7,
       ax: Math.random() * TAU, ay: Math.random() * TAU,
-      sx: (Math.random() - 0.5) * 0.6, sy: (Math.random() - 0.5) * 0.8,
-      col: Math.random() < 0.5 ? '76,240,255' : '255,77,224',
+      sx: (Math.random() - 0.5) * 0.25, sy: 0.12 + Math.random() * 0.2,
+      blink: Math.random() * TAU,
     });
   }
 }
 
-function drawAsteroids(now, dt) {
+function drawSatellites(now, dt) {
   const lw = wireScale();
-  for (const a of asteroids) {
-    a.x += a.vx * dt; a.y += a.vy * dt;
-    if (a.x < -60) a.x = innerWidth + 60; if (a.x > innerWidth + 60) a.x = -60;
-    if (a.y < -60) a.y = innerHeight + 60; if (a.y > innerHeight + 60) a.y = -60;
-    const ax = a.ax + now / 1000 * a.sx, ay = a.ay + now / 1000 * a.sy;
-    const f = a.r * 5;
-    const pts = ICO_V.map((p) => rot3([p[0] * a.r, p[1] * a.r, p[2] * a.r], ax, ay));
-    // Toutes les arêtes en un seul chemin, un seul stroke
-    bgCtx.strokeStyle = 'rgba(' + a.col + ',0.34)';
+  for (const s of satellites) {
+    s.x += s.vx * dt; s.y += s.vy * dt;
+    if (s.x < -140) s.x = innerWidth + 140; if (s.x > innerWidth + 140) s.x = -140;
+    if (s.y < -140) s.y = innerHeight + 140; if (s.y > innerHeight + 140) s.y = -140;
+    const ax = s.ax + now / 1000 * s.sx, ay = s.ay + now / 1000 * s.sy;
+    const f = s.r * 5;
+    const pts = SAT.verts.map((p) => rot3([p[0] * s.r, p[1] * s.r, p[2] * s.r], ax, ay));
+    // Toutes les arêtes en un seul chemin
+    bgCtx.strokeStyle = 'rgba(150, 210, 255, 0.4)';
     bgCtx.lineWidth = lw;
     bgCtx.beginPath();
-    for (const [i, j] of ICO_E) {
-      const p = pts[i], q = pts[j];
+    for (const [i, k] of SAT.edges) {
+      const p = pts[i], q = pts[k];
       const sp = f / (f - p[2]), sq = f / (f - q[2]);
-      bgCtx.moveTo(a.x + p[0] * sp, a.y + p[1] * sp);
-      bgCtx.lineTo(a.x + q[0] * sq, a.y + q[1] * sq);
+      bgCtx.moveTo(s.x + p[0] * sp, s.y + p[1] * sp);
+      bgCtx.lineTo(s.x + q[0] * sq, s.y + q[1] * sq);
     }
     bgCtx.stroke();
+    // Balise de position clignotante
+    const blink = Math.sin(now / 320 + s.blink);
+    if (blink > 0.6) {
+      bgCtx.fillStyle = 'rgba(255, 140, 70, 0.9)';
+      bgCtx.fillRect(s.x - 1.5 * lw, s.y - 1.5 * lw, 3 * lw, 3 * lw);
+    }
   }
 }
 
-/** Sol en grille perspective. Deux strokes + un fondu : plus de dégradé par colonne. */
-let gridPhase = 0;
-function drawGrid() {
-  if (Q.low) return;
-  const W = innerWidth, H = innerHeight, hy = bgCache.hy || H * 0.58;
-  const speed = 0.35 + clamp(Math.abs(state.vel) / 30, 0, 1) * 3;
-  gridPhase = (gridPhase + 0.016 * speed) % 1;
-  bgCtx.save();
-  bgCtx.beginPath(); bgCtx.rect(0, hy, W, H - hy); bgCtx.clip();
-  bgCtx.lineWidth = 1;
-
-  // Lignes horizontales : espacement en t^3 pour l'effet de fuite
-  bgCtx.strokeStyle = 'rgba(76,240,255,0.3)';
-  bgCtx.beginPath();
-  for (let i = 0; i < 14; i++) {
-    const y = hy + (H - hy) * Math.pow((i + gridPhase) / 14, 3);
-    bgCtx.moveTo(0, y); bgCtx.lineTo(W, y);
-  }
-  bgCtx.stroke();
-
-  // Lignes verticales convergeant vers le point de fuite
-  const vx = W / 2 + (parseFloat(document.documentElement.style.getPropertyValue('--px')) || 0) * -W * 0.05;
-  bgCtx.strokeStyle = 'rgba(255,77,224,0.26)';
-  bgCtx.beginPath();
-  for (let i = -14; i <= 14; i++) {
-    bgCtx.moveTo(vx, hy);
-    bgCtx.lineTo(W / 2 + i * (W * 1.6 / 14), H);
-  }
-  bgCtx.stroke();
-
-  // Fondu vers l'horizon : on efface au lieu de dégrader chaque ligne
-  if (bgCache.fade) {
-    bgCtx.globalCompositeOperation = 'destination-out';
-    bgCtx.fillStyle = bgCache.fade;
-    bgCtx.fillRect(0, hy, W, H - hy);
-    bgCtx.globalCompositeOperation = 'source-over';
-  }
-  if (bgCache.glow) {
-    bgCtx.fillStyle = bgCache.glow;
-    bgCtx.fillRect(0, hy, W, H * 0.25);
-  }
-  bgCtx.restore();
-}
-
-/** Cage holographique autour de la roue (moitié arrière sur le fond, avant sur les FX). */
+/** Coque orbitale autour de la roue (moitié arrière au fond, avant sur les FX). */
 function drawCage(ctx, now, front) {
   if (!cssSize || !state.segments.length || Q.low) return;
   const wc = wheelCenter();
-  wireSphere(ctx, wc.x, wc.y, wc.R * 1.24, 0.35 + Math.sin(now / 6000) * 0.15, now / 9000 * TAU + state.rot * 0.2, {
-    col: '120,220,255', lats: 3, lons: 6, width: wireScale(),
-    aBack: 0.26, aFront: 0.12,
-    onlyFront: front, onlyBack: !front,
-  });
+  wireSphere(ctx, wc.x, wc.y, wc.R * 1.24, 0.35 + Math.sin(now / 6000) * 0.15,
+    now / 9000 * TAU + state.rot * 0.2, {
+      col: '130, 200, 255', lats: 3, lons: 6, width: wireScale(),
+      aBack: 0.22, aFront: 0.1, onlyFront: front, onlyBack: !front,
+    });
 }
 
-/** Réticule de visée : couronne graduée, arcs tournants, crochets. */
+/** Réticule de poursuite : couronne graduée, arcs, crochets d'acquisition. */
 function drawReticle(now) {
   if (!cssSize || !state.segments.length) return;
   const wc = wheelCenter();
   const lock = state.suspense;
-  const col = lock > 0.3 ? '255,77,224' : '76,240,255';
+  const col = lock > 0.3 ? '255, 157, 61' : '87, 215, 255';   // ambre au verrouillage
   const ws = wireScale();
   const ctx = bgCtx;
 
@@ -780,10 +814,9 @@ function drawReticle(now) {
   ctx.translate(wc.x, wc.y);
   ctx.rotate(-state.rot * 0.5 - now / 30000 * TAU);
   ctx.lineWidth = ws;
-  // Graduations : deux chemins (majeures / mineures) au lieu d'un stroke par trait
   const r1 = wc.R * 1.33;
   for (const major of [false, true]) {
-    ctx.strokeStyle = 'rgba(' + col + ',' + (major ? 0.55 : 0.26) + ')';
+    ctx.strokeStyle = 'rgba(' + col + ',' + (major ? 0.5 : 0.24) + ')';
     ctx.beginPath();
     for (let i = 0; i < 36; i++) {
       if ((i % 3 === 0) !== major) continue;
@@ -798,20 +831,19 @@ function drawReticle(now) {
 
   ctx.save();
   ctx.translate(wc.x, wc.y);
-  ctx.strokeStyle = 'rgba(' + col + ',0.45)';
+  ctx.strokeStyle = 'rgba(' + col + ',0.4)';
   ctx.lineWidth = (1.5 + lock * 1.5) * ws;
   ctx.beginPath();
   for (const [rr, sp, span] of [[1.38, 1 / 7000, 2.1], [1.42, -1 / 11000, 1.1], [1.29, 1 / 4000, 0.5]]) {
     const a0 = now * sp * TAU + state.rot * 0.2;
     ctx.arc(0, 0, wc.R * rr, a0, a0 + span);
-    ctx.moveTo(0, 0);                                // coupe le trait entre deux arcs
+    ctx.moveTo(0, 0);
   }
   ctx.stroke();
 
-  // Crochets d'angle (se resserrent au verrouillage)
   const d = wc.R * (1.55 - 0.08 * lock);
   const L = 18 * ws;
-  ctx.strokeStyle = 'rgba(' + col + ',' + (0.5 + 0.4 * lock) + ')';
+  ctx.strokeStyle = 'rgba(' + col + ',' + (0.45 + 0.4 * lock) + ')';
   ctx.lineWidth = 2 * ws;
   ctx.beginPath();
   for (const [sx, sy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
@@ -821,45 +853,40 @@ function drawReticle(now) {
   ctx.restore();
 }
 
-/** Tunnel hyperespace : anneaux qui foncent vers la caméra au départ du spin. */
-let tunnel = { t0: -1e9, rings: [] };
-function tunnelStart(now) {
-  tunnel.t0 = now;
-  tunnel.rings = Array.from({ length: 10 }, (_, i) => ({ z: i / 10 }));
-}
-function drawTunnel(now, dt) {
-  const age = (now - tunnel.t0) / 1000;
-  if (age < 0 || age > 2.2 || state.reduced || Q.low) return;
-  const I = age < 0.3 ? age / 0.3 : age > 1.5 ? 1 - (age - 1.5) / 0.7 : 1;
+/** Acquisition de signal : balayage radar + pings concentriques au lancement. */
+let ping = { t0: -1e9 };
+function pingStart(now) { ping.t0 = now; }
+
+function drawPing(now) {
+  const age = (now - ping.t0) / 1000;
+  if (age < 0 || age > 2.4 || state.reduced || Q.low) return;
   const wc = wheelCenter();
-  const spin = state.rot * 0.6;
-  const maxR = Math.max(innerWidth, innerHeight) * 1.6;
-  fctx.save();
-  fctx.lineWidth = 1.5 * wireScale();
-  for (const ring of tunnel.rings) {
-    ring.z += 1.6 * dt;
-    if (ring.z > 1) ring.z -= 1;
-    const r = wc.R * 0.25 / (1.05 - ring.z);
-    if (r > maxR) continue;
-    fctx.strokeStyle = ((ring.z * 5 | 0) % 2 ? 'rgba(255,77,224,' : 'rgba(76,240,255,') + (I * 0.55 * ring.z) + ')';
+  const fade = age > 1.7 ? 1 - (age - 1.7) / 0.7 : 1;
+  const maxR = Math.max(innerWidth, innerHeight) * 0.9;
+
+  // Trois ondes concentriques décalées dans le temps
+  fctx.lineWidth = 2 * wireScale();
+  for (let k = 0; k < 3; k++) {
+    const p = age - k * 0.35;
+    if (p < 0 || p > 1.6) continue;
+    const r = wc.R * 0.9 + (maxR - wc.R * 0.9) * (p / 1.6);
+    fctx.strokeStyle = `rgba(87, 215, 255, ${(0.5 * (1 - p / 1.6) * fade).toFixed(3)})`;
     fctx.beginPath();
-    for (let k = 0; k <= 10; k++) {
-      const ang = k / 10 * TAU + spin;
-      const x = wc.x + Math.cos(ang) * r, y = wc.y + Math.sin(ang) * r;
-      k ? fctx.lineTo(x, y) : fctx.moveTo(x, y);
-    }
+    fctx.arc(wc.x, wc.y, r, 0, TAU);
     fctx.stroke();
   }
-  // Longerons : un seul chemin
-  fctx.strokeStyle = 'rgba(160,230,255,' + (I * 0.16) + ')';
+
+  // Balayage radar : un secteur qui tourne vite
+  const a = age * 7;
+  const grad = fctx.createRadialGradient(wc.x, wc.y, wc.R * 0.4, wc.x, wc.y, wc.R * 1.6);
+  grad.addColorStop(0, `rgba(87, 215, 255, ${0.16 * fade})`);
+  grad.addColorStop(1, 'rgba(87, 215, 255, 0)');
+  fctx.fillStyle = grad;
   fctx.beginPath();
-  for (let k = 0; k < 8; k++) {
-    const ang = k / 8 * TAU + spin;
-    fctx.moveTo(wc.x + Math.cos(ang) * wc.R * 0.25, wc.y + Math.sin(ang) * wc.R * 0.25);
-    fctx.lineTo(wc.x + Math.cos(ang) * maxR, wc.y + Math.sin(ang) * maxR);
-  }
-  fctx.stroke();
-  fctx.restore();
+  fctx.moveTo(wc.x, wc.y);
+  fctx.arc(wc.x, wc.y, wc.R * 1.6, a - 0.5, a);
+  fctx.closePath();
+  fctx.fill();
 }
 
 /* ============================ 6. Rendu de la roue ========================= */
@@ -1040,7 +1067,7 @@ function drawWheel(now) {
   const haloI = Math.max(state.suspense, state.winner !== null ? 0.7 : 0);
   if (haloI > 0.02 && !state.reduced) {
     const pulse = 0.6 + 0.4 * Math.sin(now / (110 - 60 * state.suspense));
-    const col = state.winner !== null ? state.segments[state.winner].color : '#ffd75e';
+    const col = state.winner !== null ? state.segments[state.winner].color : '#57d7ff';
     els.halo.style.setProperty('--halo-color', col);
     els.halo.style.transform = `translate(-50%,-50%) translateY(${floatY.toFixed(1)}px) scale(${(breath * zoom).toFixed(3)})`;
     els.halo.style.opacity = (0.55 * haloI * pulse).toFixed(3);
@@ -1057,31 +1084,35 @@ function drawWheel(now) {
     els.rays.style.opacity = (0.4 + 0.5 * Math.max(speedF, state.suspense, state.winner !== null ? 0.6 : 0)).toFixed(2);
   }
 
-  // Anneaux orbitaux et lunes qui gravitent autour du portail
+  // Orbites inclinées : des satellites gravitent autour de la roue
   if (!state.reduced) {
     const orbits = [
-      { r: R * 1.06, speed: 1 / 5200, moon: 3.2, col: '76,240,255' },
-      { r: R * 1.13, speed: -1 / 8300, moon: 2.4, col: '255,77,224' },
+      { r: R * 1.10, tilt: 0.30, speed: 1 / 6400, col: '135, 205, 255' },
+      { r: R * 1.19, tilt: 0.16, speed: -1 / 9800, col: '255, 157, 61' },
     ];
     for (const o of orbits) {
+      c.save();
+      c.scale(1, o.tilt);                                  // le cercle devient une ellipse
       c.beginPath(); c.arc(0, 0, o.r, 0, TAU);
-      c.strokeStyle = 'rgba(' + o.col + ',0.16)';
-      c.lineWidth = 1;
-      c.setLineDash([2, 6]);
+      c.strokeStyle = 'rgba(' + o.col + ',0.2)';
+      c.lineWidth = 1 / o.tilt;                            // compense l'aplatissement
+      c.setLineDash([3, 7]);
       c.stroke();
       c.setLineDash([]);
-      const a = now * o.speed * TAU + state.rot * 0.15;
-      const dir = Math.sign(o.speed);
-      for (let k = 6; k >= 1; k--) {                     // traînée de la lune
-        const ak = a - dir * k * 0.06;
-        c.beginPath(); c.arc(Math.cos(ak) * o.r, Math.sin(ak) * o.r, o.moon * (1 - k / 8), 0, TAU);
-        c.fillStyle = 'rgba(' + o.col + ',' + (0.5 * (1 - k / 7)) + ')';
-        c.fill();
-      }
-      const mx = Math.cos(a) * o.r, my = Math.sin(a) * o.r;
-      c.beginPath(); c.arc(mx, my, o.moon, 0, TAU);
-      c.fillStyle = '#fff';
-      c.fill();
+      c.restore();
+
+      const ang = now * o.speed * TAU + state.rot * 0.12;
+      const sx = Math.cos(ang) * o.r, sy = Math.sin(ang) * o.r * o.tilt;
+      const sz = Math.sin(ang);                            // >0 : devant la roue
+      const sc = (0.75 + 0.35 * sz) * wireScale();
+      c.strokeStyle = 'rgba(' + o.col + ',' + (sz > 0 ? 0.95 : 0.4) + ')';
+      c.lineWidth = 1.2 * sc;
+      c.beginPath();
+      c.moveTo(sx - 4.5 * sc, sy); c.lineTo(sx + 4.5 * sc, sy);   // panneaux solaires
+      c.moveTo(sx, sy - 1.8 * sc); c.lineTo(sx, sy + 1.8 * sc);
+      c.stroke();
+      c.fillStyle = 'rgba(' + o.col + ',' + (sz > 0 ? 1 : 0.5) + ')';
+      c.fillRect(sx - 1.3 * sc, sy - 1.3 * sc, 2.6 * sc, 2.6 * sc);
     }
   }
 
@@ -1108,7 +1139,7 @@ function drawWheel(now) {
     const cur = indexAt(state.rot);
     c.beginPath();
     wedgePath(c, cur, Rw);
-    c.fillStyle = `rgba(255,255,255,${0.08 + 0.1 * (0.5 + 0.5 * Math.sin(now / 55))})`;
+    c.fillStyle = `rgba(255,214,170,${0.08 + 0.1 * (0.5 + 0.5 * Math.sin(now / 55))})`;
     c.fill();
   }
 
@@ -1166,8 +1197,8 @@ function drawWheel(now) {
   if (plasma > 0.02 && c.createConicGradient) {
     const eg = c.createConicGradient(state.rot * 1.6, 0, 0);
     for (let k = 0; k < 6; k++) {
-      eg.addColorStop(k / 6, k % 2 ? 'rgba(255,77,224,0)' : 'rgba(76,240,255,0)');
-      eg.addColorStop(k / 6 + 0.08, k % 2 ? 'rgba(255,77,224,0.9)' : 'rgba(76,240,255,0.9)');
+      eg.addColorStop(k / 6, k % 2 ? 'rgba(255,157,61,0)' : 'rgba(87,215,255,0)');
+      eg.addColorStop(k / 6 + 0.08, k % 2 ? 'rgba(255,157,61,0.85)' : 'rgba(87,215,255,0.9)');
       eg.addColorStop(k / 6 + 0.16, 'rgba(255,255,255,0)');
     }
     c.save();
@@ -1188,7 +1219,7 @@ function drawWheel(now) {
   c.stroke();
   if (!state.reduced) {
     // Néon : trois passes concentriques — bien moins cher qu'un shadowBlur
-    const hue = (185 + 120 * (0.5 + 0.5 * Math.sin(now / 1800))).toFixed(0);
+    const hue = (196 - 32 * (0.5 + 0.5 * Math.sin(now / 2600))).toFixed(0);  // cyan -> bleu glacier
     for (const [w, al] of (Q.low ? [[0.008, 0.7]] : [[0.05, 0.1], [0.024, 0.22], [0.008, 0.7]])) {
       c.beginPath(); c.arc(0, 0, R, 0, TAU);
       c.strokeStyle = `hsla(${hue},95%,62%,${al})`;
@@ -1201,22 +1232,22 @@ function drawWheel(now) {
   const hubPulse = state.spinning || state.reduced ? 1 : 1 + 0.045 * Math.sin(now / 380);
   const Rh = Math.max(Rw * 0.16, 26) * hubPulse;
   const hubG = c.createRadialGradient(-Rh * 0.3, -Rh * 0.3, Rh * 0.05, 0, 0, Rh);
-  hubG.addColorStop(0, '#5a2d9a'); hubG.addColorStop(0.5, '#1c0f3d'); hubG.addColorStop(1, '#07091a');
+  hubG.addColorStop(0, '#1d4a72'); hubG.addColorStop(0.5, '#0c2038'); hubG.addColorStop(1, '#040a14');
   c.beginPath(); c.arc(0, 0, Rh, 0, TAU);
   c.fillStyle = hubG;
   c.fill();
   if (!state.reduced) {                              // lueur du moyeu : un anneau, pas un flou
     c.beginPath(); c.arc(0, 0, Rh * 1.06, 0, TAU);
-    c.strokeStyle = 'rgba(76,240,255,' + (0.18 + 0.14 * Math.sin(now / 380)).toFixed(3) + ')';
+    c.strokeStyle = 'rgba(87,215,255,' + (0.18 + 0.14 * Math.sin(now / 380)).toFixed(3) + ')';
     c.lineWidth = Rh * 0.16;
     c.stroke();
   }
   if (!state.reduced && !Q.low && c.createConicGradient) {   // vortex d'accrétion
     const vg = c.createConicGradient(now / 600 + state.rot * 2.2, 0, 0);
-    vg.addColorStop(0, 'rgba(76,240,255,0)'); vg.addColorStop(0.12, 'rgba(76,240,255,0.6)');
-    vg.addColorStop(0.3, 'rgba(0,0,0,0)'); vg.addColorStop(0.5, 'rgba(255,77,224,0.55)');
-    vg.addColorStop(0.65, 'rgba(0,0,0,0)'); vg.addColorStop(0.85, 'rgba(123,44,255,0.6)');
-    vg.addColorStop(1, 'rgba(76,240,255,0)');
+    vg.addColorStop(0, 'rgba(87,215,255,0)'); vg.addColorStop(0.14, 'rgba(87,215,255,0.55)');
+    vg.addColorStop(0.34, 'rgba(0,0,0,0)'); vg.addColorStop(0.52, 'rgba(255,157,61,0.45)');
+    vg.addColorStop(0.7, 'rgba(0,0,0,0)'); vg.addColorStop(0.86, 'rgba(140,200,255,0.5)');
+    vg.addColorStop(1, 'rgba(87,215,255,0)');
     c.save();
     c.beginPath(); c.arc(0, 0, Rh * 0.9, 0, TAU); c.clip();
     c.globalCompositeOperation = 'screen';
@@ -1230,11 +1261,11 @@ function drawWheel(now) {
     c.restore();
   }
   c.beginPath(); c.arc(0, 0, Rh, 0, TAU);
-  c.strokeStyle = 'rgba(120,230,255,0.75)';
+  c.strokeStyle = 'rgba(140,215,255,0.8)';
   c.lineWidth = 2;
   c.stroke();
   c.beginPath(); c.arc(0, 0, Rh * 0.86, 0, TAU);
-  c.strokeStyle = 'rgba(255,77,224,0.35)';
+  c.strokeStyle = 'rgba(255,157,61,0.4)';
   c.lineWidth = 1;
   c.stroke();
   c.fillStyle = '#fff';
@@ -1248,7 +1279,7 @@ function drawWheel(now) {
     const la = state.suspense * (0.5 + 0.5 * Math.sin(now / 40));
     c.save();
     c.globalCompositeOperation = 'lighter';
-    c.strokeStyle = 'rgba(255,77,224,' + la.toFixed(3) + ')';
+    c.strokeStyle = 'rgba(255,157,61,' + la.toFixed(3) + ')';
     c.lineWidth = 2;
     c.beginPath(); c.moveTo(0, -R); c.lineTo(0, -Rh); c.stroke();
     c.restore();
@@ -1272,7 +1303,7 @@ function drawWheel(now) {
   c.lineWidth = 1.5;
   c.stroke();
   c.beginPath(); c.arc(0, -ph * 0.3, pw * 0.32, 0, TAU);
-  c.fillStyle = '#4cf0ff';
+  c.fillStyle = '#ff9d3d';
   c.fill();
   c.restore();
 
@@ -1287,7 +1318,7 @@ const sparks = [];     // étincelles du pointeur
 const waves = [];      // ondes de choc circulaires
 const rays = [];       // rayons lumineux depuis le gagnant
 
-const CONFETTI_COLORS = ['#ff4de0', '#4cf0ff', '#ffd75e', '#7b2cff', '#ffffff', '#3ddc97', '#ff9a3d'];
+const CONFETTI_COLORS = ['#57d7ff', '#ff9d3d', '#ffd166', '#ffffff', '#8ad4ff', '#3ddc97', '#c9e6ff'];
 
 function layoutFxCanvas(canvas, maxDpr) {
   const dpr = Math.min(devicePixelRatio || 1, maxDpr);
@@ -1330,7 +1361,7 @@ function goldRain(n) {
       vx: (Math.random() - 0.5) * 60, vy: 60 + Math.random() * 140,
       rot: Math.random() * TAU, vr: (Math.random() - 0.5) * 8,
       size: 3 + Math.random() * 5,
-      color: ['#ffd75e', '#ffedb0', '#f5b93c'][(Math.random() * 3) | 0],
+      color: ['#ffd166', '#ffe9b8', '#ff9d3d'][(Math.random() * 3) | 0],
       shape: 'circle', ttl: 4 + Math.random() * 2, life: 0,
       wob: Math.random() * TAU, gold: true,
     });
@@ -1346,7 +1377,7 @@ function spawnSparks(n, vel) {
       x: wc.x + (Math.random() - 0.5) * 8, y: wc.y - wc.R,
       vx: Math.cos(a) * v * -Math.sign(vel || 1), vy: Math.sin(a) * v,
       ttl: 0.3 + Math.random() * 0.35, life: 0,
-      color: Math.random() < 0.6 ? '#4cf0ff' : '#ffffff',
+      color: Math.random() < 0.6 ? '#57d7ff' : '#ffffff',
     });
   }
 }
@@ -1373,7 +1404,7 @@ function drawFx(now, dt) {
   const dpr = els.fx._dpr || 1;
   fctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   fctx.clearRect(0, 0, innerWidth, innerHeight);
-  if (extras) { drawCage(fctx, now, true); drawTunnel(now, dt); }
+  if (extras) { drawCage(fctx, now, true); drawPing(now); }
   if (!hasWork) return;
 
   // Rayons lumineux (additifs) qui partent du segment gagnant
@@ -1505,7 +1536,7 @@ function startSpin() {
   };
   state.spinning = true;
   lockUI(true);
-  tunnelStart(performance.now() + (state.reduced ? 0 : 450));   // après le micro-recul
+  pingStart(performance.now() + (state.reduced ? 0 : 450));     // après le micro-recul
   sndWhoosh();
   vibrate(15);
   announce('La roue tourne…');
@@ -1590,7 +1621,7 @@ function finishSpin(now) {
     const { r: wr, g: wg, b: wb } = hexToRgb(seg.color);
     spawnWave();
     setTimeout(() => spawnWave(wr + ',' + wg + ',' + wb), 180);
-    setTimeout(() => spawnWave('76,240,255'), 360);
+    setTimeout(() => spawnWave('87,215,255'), 360);
 
     const screenAngle = norm(arcs[winner].mid + state.rot);
     spawnRays(seg.color, screenAngle);
