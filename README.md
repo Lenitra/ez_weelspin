@@ -1,16 +1,23 @@
-# WeelSpin 🎡
+# WeelSpin 🛰️
 
-Roue de la fortune 100 % statique (personnes, récompenses, choix… tout ce qui se tire au sort) : vanilla JS, zéro dépendance, zéro requête réseau.
-Configuration (segments) dans le localStorage, avec export / import JSON.
+Roue de la fortune 100 % statique (personnes, récompenses, choix… tout ce qui se tire au sort) :
+vanilla JS, zéro dépendance, zéro requête réseau. Segments dans le localStorage, export / import JSON.
 
 ## Lancer en local
 
 Double-cliquez sur `src/index.html` — ça marche directement en `file://`.
 
+## Construire
+
+Lancez `build.bat`. Il produit deux choses :
+
+- **`builds/weelspin.html`** — un **fichier HTML unique** (~109 Ko) : CSS, JS et favicon inclus.
+  Copiez-le où vous voulez, envoyez-le par mail, ouvrez-le d'un double-clic. Rien d'autre à côté.
+- `weelspin-dist.zip` — le contenu de `src/`, si vous préférez déployer les fichiers séparés.
+
 ## Déployer sur nginx
 
-1. Lancez `build.bat` → génère `weelspin-dist.zip`.
-2. Décompressez le zip dans le dossier servi, ex. `/var/www/weelspin/`.
-3. C'est tout : aucun build, aucune config nginx particulière.
+Déposez `builds/weelspin.html` dans le dossier servi (ex. `/var/www/weelspin/index.html`),
+ou décompressez le zip dedans. Aucune configuration particulière.
 
-Raccourcis : **Espace** pour lancer, bouton ⛶ pour le mode présentation (TV).
+Raccourcis : **Espace** pour lancer, ⛶ pour le mode présentation (TV).
